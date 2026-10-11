@@ -1,0 +1,231 @@
+# server.py
+import argparse
+import asyncio
+import io
+import os
+import sys
+import traceback
+from contextlib import asynccontextmanager
+import torch
+import uvicorn
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import Response, JSONResponse
+
+# Ensure current server directory is on sys.path regardless of execution working directory
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+if CURRENT_DIR not in sys.path:
+    sys.path.insert(0, CURRENT_DIR)
+
+import config
+from model_manager import DynamicModelManager, ENCODER_REGISTRY
+
+# Parse CLI arguments with fallback to config defaults
+parser = argparse.ArgumentParser(description="ComfyUI Condition Bridge Server")
+parser.add_argument(
+    "--max-models",
+    type=int,
+    default=None,
+    help=f"Maximum number of models resident in unified memory (default: {config.MAX_MODELS})"
+)
+parser.add_argument(
+    "--idle-timeout",
+    type=int,
+    default=None,
+    help=f"Idle timeout in seconds before auto-unloading (default: {config.IDLE_TIMEOUT}, 0=disabled)"
+)
+parser.add_argument(
+    "--port",
+    type=int,
+    default=None,
+    help=f"Server listen port (default: {config.PORT})"
+)
+parser.add_argument(
+    "--host",
+    type=str,
+    default=None,
+    help=f"Server listen host (default: {config.HOST})"
+)
+parser.add_argument(
+    "--models-dir",
+    type=str,
+    default=None,
+    help=f"Root directory containing model folders (default: {config.MODELS_DIR})"
+)
+parser.add_argument(
+    "--device",
+    type=str,
+    default=None,
+    help=f"Inference device (default: {config.DEVICE})"
+)
+args, _ = parser.parse_known_args()
+
+# Apply runtime CLI overrides
+config.update_runtime_config(
+    host=args.host,
+    port=args.port,
+    max_models=args.max_models,
+    idle_timeout=args.idle_timeout,
+    device=args.device,
+    models_dir=args.models_dir,
+)
+
+# Initialize pool manager
+model_manager = DynamicModelManager(
+    max_models=config.MAX_MODELS,
+    idle_timeout=config.IDLE_TIMEOUT
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Manages server lifecycle, starting watchdog and ensuring clean shutdown.
+    """
+    print(
+        f"[Server Startup] DynamicModelManager initialized "
+        f"(max_resident={config.MAX_MODELS}, idle_timeout={config.IDLE_TIMEOUT}s, "
+        f"device={config.DEVICE}, models_dir='{config.MODELS_DIR}')."
+    )
+    model_manager.start_watchdog()
+    yield
+    print("[Server Shutdown] Cleaning up all models and background tasks...")
+    model_manager.stop_watchdog()
+    await model_manager.unload_all()
+
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(
+    title="ComfyUI Condition Bridge",
+    version="2.0.0",
+    lifespan=lifespan
+)
+
+# Enable CORS for cross-origin browser requests (e.g. from ComfyUI Web UI)
+# Using allow_credentials=False complies with W3C wildcard origin specs
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def add_private_network_headers(request: Request, call_next):
+    """
+    Support Chromium Private Network Access (PNA) specifications for LAN queries.
+    """
+    response = await call_next(request)
+    if "access-control-request-private-network" in request.headers:
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Service health probe and resident pool inspection.
+    """
+    model_manager.scan_models()
+    return JSONResponse(
+        content={
+            "status": "online",
+            "device": config.DEVICE,
+            "dtype": str(config.DTYPE),
+            "max_models": model_manager.max_models,
+            "idle_timeout": model_manager.idle_timeout,
+            "models_dir": config.MODELS_DIR,
+            "active_models": list(model_manager.pool.keys()),
+            "discovered_models": list(model_manager.discovered_models.keys()),
+        }
+    )
+
+
+@app.get("/v1/models")
+async def list_models():
+    """
+    Returns list of discovered model folder names and their encoder categories.
+    Used by ComfyUI client node to populate the dynamic model selection dropdown.
+    """
+    discovered = model_manager.scan_models()
+    models = list(discovered.keys())
+    model_types = {name: info["type"] for name, info in discovered.items()}
+    return JSONResponse(
+        content={
+            "models": models,
+            "model_types": model_types,
+            "resident_models": list(model_manager.pool.keys()),
+            "models_dir": config.MODELS_DIR,
+        }
+    )
+
+
+@app.post("/v1/encode/{model_name}")
+async def encode_dynamic(model_name: str, request: Request):
+    """
+    Generic endpoint routing requests to the specified registered encoder.
+    """
+    try:
+        body = await request.body()
+        payload = torch.load(io.BytesIO(body), weights_only=False)
+
+        # Acquire loaded encoder from pool
+        encoder = await model_manager.get_encoder(model_name)
+
+        # Execute encoder forward pass inside worker thread
+        result = await asyncio.to_thread(encoder.encode, **payload)
+
+        # Serialize results to binary stream
+        buffer = io.BytesIO()
+        torch.save(result, buffer)
+
+        return Response(
+            content=buffer.getvalue(),
+            media_type="application/octet-stream"
+        )
+
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        print("\n" + "!" * 60)
+        print(f">>> [Server Error] Exception during encoding '{model_name}':")
+        traceback.print_exc()
+        print("!" * 60 + "\n")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.post("/v1/unload")
+async def manual_unload(request: Request):
+    """
+    Manual eviction API. Can accept an optional JSON body: {"model_name": "qwen_image_21"}.
+    If model_name is omitted or empty, unloads all resident models.
+    """
+    model_to_evict = None
+    try:
+        data = await request.json()
+        model_to_evict = data.get("model_name")
+    except Exception:
+        pass
+
+    if model_to_evict:
+        await model_manager.evict_model(model_to_evict)
+    else:
+        await model_manager.unload_all()
+
+    return {
+        "status": "ok",
+        "remaining_models": list(model_manager.pool.keys())
+    }
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host=config.HOST,
+        port=config.PORT,
+        log_level="info"
+    )
