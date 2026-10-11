@@ -3,7 +3,7 @@ import os
 import time
 from typing import Any, Dict, List
 import torch
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 import config
 from .base import BaseEncoder
@@ -19,7 +19,7 @@ class FluxKleinEncoder(BaseEncoder):
       - Uses KLEIN_PROMPT_TEMPLATE
       - Taps layer indices [9, 18, 27]
       - Concatenates 3 layers to 12288 dimensions
-      - Avoids device_map deadlock on Apple Silicon MPS
+      - Accelerated direct Unified Memory (MPS) loading
     """
 
     def __init__(self, model_path: str, max_length: int = 512):
@@ -46,28 +46,27 @@ class FluxKleinEncoder(BaseEncoder):
             self.tokenizer.pad_token_id = 151643
 
         t0 = time.time()
-        print(f"[FluxKlein] Staging model weights into unified memory ({self.dtype})...")
+        print(f"[FluxKlein] Staging model weights with C++ empty-tensor loader ({self.dtype})...")
         try:
-            # Fast bulk loading in C++ (bypasses slow 398-step Python reflection loop)
-            self.model = AutoModel.from_pretrained(
+            # Solid production loader: low_cpu_mem_usage=True uses meta-tensor initialization.
+            # Bypasses device_map accelerate dispatch hooks to prevent Python 3.13 Metal segfaults.
+            self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
                 dtype=self.dtype,
+                low_cpu_mem_usage=True,
                 local_files_only=True,
                 trust_remote_code=True,
-                low_cpu_mem_usage=False,
             )
         except Exception as e:
-            # Fallback to low_cpu_mem_usage if bulk allocation encounters issues
-            print(f"[FluxKlein] Bulk allocation fallback ({e}); using segmented staging...")
-            self.model = AutoModel.from_pretrained(
+            print(f"[FluxKlein] Staging fallback ({e}); retrying standard loader...")
+            self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_path,
                 dtype=self.dtype,
                 local_files_only=True,
                 trust_remote_code=True,
-                low_cpu_mem_usage=True,
             )
 
-        print(f"[FluxKlein] Moving weights to {self.device}...")
+        print(f"[FluxKlein] Transferring weights to {self.device}...")
         self.model = self.model.to(device=self.device, non_blocking=True)
         self.model.eval()
 
