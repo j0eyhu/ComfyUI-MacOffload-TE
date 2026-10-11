@@ -73,7 +73,7 @@ sequenceDiagram
 | :--- | :--- | :--- | :--- |
 | `flux2-klein-4b-uncensored-text-encoder` | Qwen3-4B | [`ponpoke/flux2-klein-4b-uncensored-text-encoder`](https://huggingface.co/ponpoke/flux2-klein-4b-uncensored-text-encoder) | Uncensored text encoder variant for FLUX.2-klein 4B DiT. Processed to remove refusal vectors to prevent safety filter refusals. |
 | `flux2-klein-9b-uncensored-text-encoder` | Qwen3-8B | [`ponpoke/flux2-klein-9b-uncensored-text-encoder`](https://huggingface.co/ponpoke/flux2-klein-9b-uncensored-text-encoder) | Uncensored text encoder variant for FLUX.2-klein 9B DiT with higher parameter capacity for nuanced prompt comprehension without safety filter refusals. |
-| `Qwen-Image-2.1-Text-Encoder-Heretic` | Qwen2.5-VL / Qwen-Image-2.1 | [`pottokao/Qwen-Image-2.1-Text-Encoder-Heretic`](https://huggingface.co/pottokao/Qwen-Image-2.1-Text-Encoder-Heretic) | Abliterated "Heretic" version of Qwen-Image-2.1 text encoder. Removes safety alignment refusals using directional ablation on `o_proj` and `down_proj` layers while preserving functional vision-language performance. |
+| `Qwen-Image-2.1-Text-Encoder-Heretic` | Qwen3-VL-8B | [`pottokao/Qwen-Image-2.1-Text-Encoder-Heretic`](https://huggingface.co/pottokao/Qwen-Image-2.1-Text-Encoder-Heretic) | Abliterated "Heretic" version of the Qwen-Image-2.1 text encoder based on the Qwen3-VL-8B architecture. Removes safety alignment refusals using directional ablation on `o_proj` and `down_proj` layers while preserving functional vision-language performance. |
 
 ---
 

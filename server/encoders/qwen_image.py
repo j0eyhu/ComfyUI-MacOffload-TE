@@ -17,7 +17,7 @@ IM_START_TOKEN_ID = 151644
 
 class QwenImage21Encoder(BaseEncoder):
     """
-    Multimodal Text and Vision conditioning encoder for Qwen-Image-2.1.
+    Multimodal Text and Vision conditioning encoder for Qwen-Image-2.1 (based on Qwen3-VL-8B).
     Strictly replicates ComfyUI comfy.text_encoders.qwen_image21 behavior:
       - Uses T2I_TEMPLATE with System Prompt
       - Extracts last hidden states WITHOUT final RMSNorm

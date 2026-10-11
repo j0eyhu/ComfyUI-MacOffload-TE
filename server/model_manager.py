@@ -33,7 +33,7 @@ def detect_model_type(folder_path: str) -> str:
             archs = [str(a).lower() for a in data.get("architectures", [])]
             mtype = str(data.get("model_type", "")).lower()
 
-            if any("qwen2_5_vl" in a or "qwen2vl" in a or "imagetext" in a for a in archs) or "vl" in mtype:
+            if any("qwen2_5_vl" in a or "qwen2vl" in a or "qwen3_vl" in a or "qwen3vl" in a or "imagetext" in a for a in archs) or "vl" in mtype:
                 return "qwen_image"
             if any("causallm" in a or "qwen" in a or "flux" in a for a in archs) or "qwen" in mtype:
                 return "flux_klein"
