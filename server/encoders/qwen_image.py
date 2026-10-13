@@ -55,6 +55,18 @@ class QwenImage21Encoder(BaseEncoder):
         self.model.eval()
         print("[QwenImage21] Model successfully loaded and resident in Unified Memory.")
 
+    def unload(self) -> None:
+        """Explicitly dismantles model objects to free unified memory."""
+        if hasattr(self, "model") and self.model is not None:
+            del self.model
+            self.model = None
+        if hasattr(self, "processor") and self.processor is not None:
+            del self.processor
+            self.processor = None
+        if hasattr(self, "tokenizer") and self.tokenizer is not None:
+            del self.tokenizer
+            self.tokenizer = None
+
     def _extract_conditioning(
         self,
         text_prompt: str,

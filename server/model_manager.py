@@ -172,6 +172,9 @@ class DynamicModelManager:
                     f"Evicting LRU model '{lru_name}'..."
                 )
                 self._evict_model_unlocked(lru_name)
+                # Memory Settling Window: Allow macOS Mach kernel VM / Metal daemon
+                # to complete asynchronous page unmapping before high-throughput SSD reading begins.
+                await asyncio.sleep(0.5)
 
             # 3. Cache miss: instantiate and load dynamically
             info = self.discovered_models.get(model_name)
@@ -194,15 +197,37 @@ class DynamicModelManager:
 
     def _evict_model_unlocked(self, model_name: str) -> None:
         """
-        Internal eviction helper (must be called with self.lock held).
+        Internal eviction helper with deterministic multi-tier memory purging.
         """
         if model_name in self.pool:
             item = self.pool.pop(model_name)
+            # Step 1: Explicitly dismantle encoder attributes
+            try:
+                if hasattr(item.encoder, "unload"):
+                    item.encoder.unload()
+            except Exception as e:
+                print(f"[ModelManager] Warning during '{model_name}' unload: {e}")
+
             del item.encoder
             del item
+
+            # Step 2: Flush Metal hardware queues before deallocation
+            if config.DEVICE == "mps" and hasattr(torch, "mps"):
+                try:
+                    torch.mps.synchronize()
+                except Exception:
+                    pass
+
+            # Step 3: Multi-generation Python GC
             gc.collect()
-            if config.DEVICE == "mps":
+            gc.collect()
+
+            # Step 4: Empty PyTorch allocator caches
+            if config.DEVICE == "mps" and hasattr(torch, "mps"):
                 torch.mps.empty_cache()
+            elif config.DEVICE == "cuda" and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             print(f"[ModelManager] Model '{model_name}' successfully evicted and memory reclaimed.")
 
     async def evict_model(self, model_name: str) -> None:

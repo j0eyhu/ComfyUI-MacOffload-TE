@@ -26,3 +26,9 @@ class BaseEncoder(ABC):
         Extract conditioning features and return dictionary matching ComfyUI format.
         """
         pass
+
+    def unload(self) -> None:
+        """
+        Explicitly teardown model attributes and release memory references.
+        """
+        pass

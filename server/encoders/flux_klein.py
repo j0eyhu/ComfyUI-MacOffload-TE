@@ -76,6 +76,15 @@ class FluxKleinEncoder(BaseEncoder):
         elapsed = time.time() - t0
         print(f"[FluxKlein] Model successfully loaded and resident on {self.device} in {elapsed:.2f}s.")
 
+    def unload(self) -> None:
+        """Explicitly dismantles model objects to free unified memory."""
+        if hasattr(self, "model") and self.model is not None:
+            del self.model
+            self.model = None
+        if hasattr(self, "tokenizer") and self.tokenizer is not None:
+            del self.tokenizer
+            self.tokenizer = None
+
     def encode(
         self,
         prompt: str,
