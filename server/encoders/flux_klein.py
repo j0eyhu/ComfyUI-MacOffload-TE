@@ -67,10 +67,14 @@ class FluxKleinEncoder(BaseEncoder):
             )
 
         print(f"[FluxKlein] Transferring weights to {self.device}...")
-        self.model = self.model.to(device=self.device, non_blocking=True)
+        self.model = self.model.to(device=self.device)
         self.model.eval()
 
-        if self.device == "mps":
+        if self.device == "mps" and hasattr(torch, "mps"):
+            try:
+                torch.mps.synchronize()
+            except Exception:
+                pass
             torch.mps.empty_cache()
 
         elapsed = time.time() - t0

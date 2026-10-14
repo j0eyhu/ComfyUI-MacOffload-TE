@@ -70,9 +70,15 @@ class DynamicModelManager:
     LRU eviction, and watchdog cleanup.
     """
 
-    def __init__(self, max_models: int = 2, idle_timeout: int = 0):
-        self.max_models = max(1, max_models)
-        self.idle_timeout = idle_timeout
+    def __init__(
+        self,
+        max_models: Optional[int] = None,
+        idle_timeout: Optional[int] = None,
+        settling_delay: Optional[float] = None,
+    ):
+        self.max_models = max(1, max_models if max_models is not None else config.MAX_MODELS)
+        self.idle_timeout = max(0, idle_timeout if idle_timeout is not None else config.IDLE_TIMEOUT)
+        self.settling_delay = max(0.0, settling_delay if settling_delay is not None else config.SETTLING_DELAY)
         self.pool: Dict[str, ManagedModel] = {}
         self.discovered_models: Dict[str, Dict[str, Any]] = {}
         self.lock = asyncio.Lock()
@@ -174,7 +180,8 @@ class DynamicModelManager:
                 self._evict_model_unlocked(lru_name)
                 # Memory Settling Window: Allow macOS Mach kernel VM / Metal daemon
                 # to complete asynchronous page unmapping before high-throughput SSD reading begins.
-                await asyncio.sleep(0.5)
+                if self.settling_delay > 0:
+                    await asyncio.sleep(self.settling_delay)
 
             # 3. Cache miss: instantiate and load dynamically
             info = self.discovered_models.get(model_name)
@@ -201,7 +208,20 @@ class DynamicModelManager:
         """
         if model_name in self.pool:
             item = self.pool.pop(model_name)
-            # Step 1: Explicitly dismantle encoder attributes
+
+            # Step 1: Ensure hardware queues finish executing pending operations before deallocation
+            if config.DEVICE == "mps" and hasattr(torch, "mps"):
+                try:
+                    torch.mps.synchronize()
+                except Exception:
+                    pass
+            elif config.DEVICE == "cuda" and torch.cuda.is_available():
+                try:
+                    torch.cuda.synchronize()
+                except Exception:
+                    pass
+
+            # Step 2: Explicitly dismantle encoder attributes while device is idle
             try:
                 if hasattr(item.encoder, "unload"):
                     item.encoder.unload()
@@ -210,13 +230,6 @@ class DynamicModelManager:
 
             del item.encoder
             del item
-
-            # Step 2: Flush Metal hardware queues before deallocation
-            if config.DEVICE == "mps" and hasattr(torch, "mps"):
-                try:
-                    torch.mps.synchronize()
-                except Exception:
-                    pass
 
             # Step 3: Multi-generation Python GC
             gc.collect()
@@ -260,7 +273,7 @@ class DynamicModelManager:
 
         while True:
             try:
-                await asyncio.sleep(30)
+                await asyncio.sleep(config.WATCHDOG_INTERVAL)
                 async with self.lock:
                     now = time.time()
                     expired = [

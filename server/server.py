@@ -6,6 +6,17 @@ import os
 import sys
 import traceback
 from contextlib import asynccontextmanager
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# Prevent PyTorch MPS allocator from hanging/throttling on unified memory during model swaps
+if "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in os.environ:
+    os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+
 import torch
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
@@ -57,6 +68,12 @@ parser.add_argument(
     default=None,
     help=f"Inference device (default: {config.DEVICE})"
 )
+parser.add_argument(
+    "--settling-delay",
+    type=float,
+    default=None,
+    help=f"Memory settling window in seconds after model eviction (default: {config.SETTLING_DELAY})"
+)
 args, _ = parser.parse_known_args()
 
 # Apply runtime CLI overrides
@@ -67,12 +84,14 @@ config.update_runtime_config(
     idle_timeout=args.idle_timeout,
     device=args.device,
     models_dir=args.models_dir,
+    settling_delay=args.settling_delay,
 )
 
 # Initialize pool manager
 model_manager = DynamicModelManager(
     max_models=config.MAX_MODELS,
-    idle_timeout=config.IDLE_TIMEOUT
+    idle_timeout=config.IDLE_TIMEOUT,
+    settling_delay=config.SETTLING_DELAY
 )
 
 
@@ -84,7 +103,8 @@ async def lifespan(app: FastAPI):
     print(
         f"[Server Startup] DynamicModelManager initialized "
         f"(max_resident={config.MAX_MODELS}, idle_timeout={config.IDLE_TIMEOUT}s, "
-        f"device={config.DEVICE}, models_dir='{config.MODELS_DIR}')."
+        f"settling_delay={config.SETTLING_DELAY}s, device={config.DEVICE}, "
+        f"models_dir='{config.MODELS_DIR}')."
     )
     model_manager.start_watchdog()
     yield

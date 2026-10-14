@@ -1,6 +1,5 @@
 # config.py
 import os
-import torch
 
 try:
     from dotenv import load_dotenv
@@ -8,13 +7,21 @@ try:
 except ImportError:
     pass
 
+# Prevent PyTorch MPS allocator from hanging/throttling on unified memory during model swaps
+if "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in os.environ:
+    os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+
+import torch
+
 # Base Server Network Binding
 HOST = os.getenv("BRIDGE_HOST", "0.0.0.0")
 PORT = int(os.getenv("BRIDGE_PORT", 8288))
 
 # Dynamic Memory & Pool Management
-MAX_MODELS = int(os.getenv("MAX_MODELS", "2"))
+MAX_MODELS = int(os.getenv("MAX_MODELS", "1"))
 IDLE_TIMEOUT = int(os.getenv("IDLE_TIMEOUT", "0"))
+SETTLING_DELAY = float(os.getenv("SETTLING_DELAY", "1.0"))
+WATCHDOG_INTERVAL = int(os.getenv("WATCHDOG_INTERVAL", "30"))
 
 # Hardware Acceleration Setup
 def detect_device() -> str:
@@ -64,10 +71,13 @@ def update_runtime_config(
     idle_timeout: int = None,
     device: str = None,
     models_dir: str = None,
+    settling_delay: float = None,
+    watchdog_interval: int = None,
 ) -> None:
     """Updates runtime configuration with CLI overrides."""
     global HOST, PORT, MAX_MODELS, IDLE_TIMEOUT, DEVICE, DTYPE, MODELS_DIR
     global QWEN_MODEL_PATH, FLUX_KLEIN_4B_PATH, FLUX_KLEIN_9B_PATH
+    global SETTLING_DELAY, WATCHDOG_INTERVAL
 
     if host is not None:
         HOST = host
@@ -77,6 +87,10 @@ def update_runtime_config(
         MAX_MODELS = max(1, max_models)
     if idle_timeout is not None:
         IDLE_TIMEOUT = max(0, idle_timeout)
+    if settling_delay is not None:
+        SETTLING_DELAY = max(0.0, settling_delay)
+    if watchdog_interval is not None:
+        WATCHDOG_INTERVAL = max(1, watchdog_interval)
     if device is not None:
         DEVICE = device
         DTYPE = torch.bfloat16 if DEVICE in ("mps", "cuda") else torch.float32

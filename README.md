@@ -124,7 +124,7 @@ sequenceDiagram
    ```ini
    MODELS_DIR=/Users/<your-username>/models
    BRIDGE_PORT=8288
-   MAX_MODELS=2
+   MAX_MODELS=1
    ```
 
    Place your model folders inside `MODELS_DIR`:
@@ -150,10 +150,11 @@ The server supports command-line arguments, `.env` file, and environment variabl
 | :--- | :--- | :--- | :--- |
 | `--host` | `BRIDGE_HOST` | `0.0.0.0` | Server host IP address to bind to |
 | `--port` | `BRIDGE_PORT` | `8288` | Port number to listen on |
-| `--max-models` | `MAX_MODELS` | `2` | Maximum concurrent models kept in Apple Silicon Unified Memory (LRU eviction) |
+| `--max-models` | `MAX_MODELS` | `1` | Maximum concurrent models kept in Apple Silicon Unified Memory (LRU eviction) |
 | `--idle-timeout` | `IDLE_TIMEOUT` | `0` | Seconds of inactivity before auto-unloading a model (`0` = keep resident indefinitely) |
 | `--models-dir` | `MODELS_DIR` | `~/models` | Root directory to scan for model folders |
 | `--device` | `BRIDGE_DEVICE` | `mps` | Target inference device (`mps` on Apple Silicon, `cuda`, or `cpu`) |
+| `--settling-delay` | `SETTLING_DELAY` | `1.0` | Memory settling window in seconds after model eviction before loading next model |
 
 ### Example CLI Commands:
 ```bash
@@ -234,7 +235,7 @@ python server.py --max-models 1 --idle-timeout 300
     "status": "online",
     "device": "mps",
     "dtype": "torch.bfloat16",
-    "max_models": 2,
+    "max_models": 1,
     "idle_timeout": 0,
     "models_dir": "/Users/user/models",
     "active_models": ["flux2-klein-4b-uncensored-text-encoder"],

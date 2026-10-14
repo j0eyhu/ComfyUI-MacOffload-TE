@@ -1,5 +1,6 @@
 # encoders/qwen_image.py
 import os
+import time
 import traceback
 from typing import Any, Dict, List
 import torch
@@ -39,21 +40,46 @@ class QwenImage21Encoder(BaseEncoder):
         if not os.path.exists(self.model_path):
             raise FileNotFoundError(f"[QwenImage21] Directory not found: {self.model_path}")
 
-        print(f"[QwenImage21] Loading weights from '{self.model_path}' onto {self.device} ({self.dtype})...")
+        t0 = time.time()
+        print(f"[QwenImage21] Staging model weights with C++ empty-tensor loader ({self.dtype})...")
         self.processor = AutoProcessor.from_pretrained(
             self.model_path,
             local_files_only=True
         )
         self.tokenizer = getattr(self.processor, "tokenizer", self.processor)
 
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            self.model_path,
-            dtype=self.dtype,
-            device_map=self.device,
-            local_files_only=True
-        )
+        try:
+            # Solid production loader: low_cpu_mem_usage=True uses meta-tensor initialization.
+            # Bypasses device_map accelerate dispatch hooks to prevent Apple Silicon MPS deadlocks.
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                self.model_path,
+                dtype=self.dtype,
+                low_cpu_mem_usage=True,
+                local_files_only=True,
+                trust_remote_code=True,
+            )
+        except Exception as e:
+            print(f"[QwenImage21] Staging fallback ({e}); retrying standard loader...")
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                self.model_path,
+                dtype=self.dtype,
+                local_files_only=True,
+                trust_remote_code=True,
+            )
+
+        print(f"[QwenImage21] Transferring weights to {self.device}...")
+        self.model = self.model.to(device=self.device)
         self.model.eval()
-        print("[QwenImage21] Model successfully loaded and resident in Unified Memory.")
+
+        if self.device == "mps" and hasattr(torch, "mps"):
+            try:
+                torch.mps.synchronize()
+            except Exception:
+                pass
+            torch.mps.empty_cache()
+
+        elapsed = time.time() - t0
+        print(f"[QwenImage21] Model successfully loaded and resident on {self.device} in {elapsed:.2f}s.")
 
     def unload(self) -> None:
         """Explicitly dismantles model objects to free unified memory."""
