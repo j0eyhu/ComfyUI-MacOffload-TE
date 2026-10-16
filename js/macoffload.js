@@ -43,6 +43,62 @@ function chainHandler(proto, name, fn) {
     };
 }
 
+async function fetchCurrentServerUrl() {
+    try {
+        const res = await fetch("/macoffload/config");
+        if (res.ok) {
+            const data = await res.json();
+            return data.server_url || "http://127.0.0.1:8288";
+        }
+    } catch (e) {
+        console.warn("[MacOffload] Failed to read current config:", e);
+    }
+    return "http://127.0.0.1:8288";
+}
+
+async function saveServerUrl(url) {
+    const clean = (url || "").trim().replace(/\/+$/, "");
+    if (!clean) return;
+    const res = await fetch("/macoffload/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ server_url: clean }),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.server_url;
+}
+
+async function promptConfigureServerUrl() {
+    const currentUrl = await fetchCurrentServerUrl();
+    const newUrl = prompt(
+        "Enter remote macOS server address (saved locally on disk, not in workflow):",
+        currentUrl
+    );
+    if (newUrl === null) return; // User cancelled
+    const cleanUrl = newUrl.trim();
+    if (!cleanUrl) return;
+
+    try {
+        const saved = await saveServerUrl(cleanUrl);
+        if (app.extensionManager?.toast?.add) {
+            app.extensionManager.toast.add({
+                severity: "success",
+                summary: "MacOffload",
+                detail: `Server address saved locally: ${saved}`,
+                life: 3000,
+            });
+        } else {
+            alert(`Server address saved locally: ${saved}`);
+        }
+    } catch (err) {
+        alert(`Failed to save server URL: ${err.message}`);
+    }
+}
+
 function openHelpDialog(node) {
     const nodeData = node.constructor?.nodeData || {};
     const title = node.title || nodeData.display_name || "About this node";
@@ -75,67 +131,19 @@ function openHelpDialog(node) {
     descP.style.color = "#ddd";
     container.appendChild(descP);
 
-    // Inputs & Parameters
-    const inputs = [];
-    const inputSpec = nodeData.input || {};
-    for (const group of ["required", "optional"]) {
-        for (const [name, spec] of Object.entries(inputSpec[group] || {})) {
-            const options = Array.isArray(spec) ? spec[1] : undefined;
-            const tooltip = options?.tooltip;
-            inputs.push({
-                name,
-                type: Array.isArray(spec) ? spec[0] : "ANY",
-                tooltip,
-                group,
-            });
-        }
-    }
+    // Server Configuration Info
+    const cfgHead = document.createElement("h4");
+    cfgHead.textContent = "Server Configuration (Saved to Disk)";
+    cfgHead.style.margin = "12px 0 6px 0";
+    cfgHead.style.color = "#61afef";
+    container.appendChild(cfgHead);
 
-    if (inputs.length > 0) {
-        const inHead = document.createElement("h4");
-        inHead.textContent = "Parameters & Inputs";
-        inHead.style.margin = "12px 0 6px 0";
-        inHead.style.color = "#61afef";
-        container.appendChild(inHead);
-
-        const list = document.createElement("div");
-        list.style.display = "flex";
-        list.style.flexDirection = "column";
-        list.style.gap = "6px";
-        list.style.marginBottom = "14px";
-
-        for (const item of inputs) {
-            const row = document.createElement("div");
-            row.style.background = "rgba(255,255,255,0.05)";
-            row.style.padding = "6px 8px";
-            row.style.borderRadius = "4px";
-
-            const nameSpan = document.createElement("strong");
-            nameSpan.textContent = item.name;
-            nameSpan.style.color = "#98c379";
-
-            const typeSpan = document.createElement("span");
-            const typeText = Array.isArray(item.type) ? "choice" : item.type;
-            typeSpan.textContent = ` (${typeText}${item.group === "optional" ? ", optional" : ""})`;
-            typeSpan.style.opacity = "0.7";
-            typeSpan.style.fontSize = "11px";
-            typeSpan.style.marginLeft = "4px";
-
-            row.appendChild(nameSpan);
-            row.appendChild(typeSpan);
-
-            if (item.tooltip) {
-                const tipDiv = document.createElement("div");
-                tipDiv.textContent = item.tooltip;
-                tipDiv.style.fontSize = "12px";
-                tipDiv.style.opacity = "0.85";
-                tipDiv.style.marginTop = "2px";
-                row.appendChild(tipDiv);
-            }
-            list.appendChild(row);
-        }
-        container.appendChild(list);
-    }
+    const cfgDesc = document.createElement("p");
+    cfgDesc.style.fontSize = "12px";
+    cfgDesc.textContent =
+        "The Mac server address is saved locally in your ComfyUI configuration and never embedded in shared workflow files. " +
+        "You can configure it via ComfyUI Settings or by clicking '⚙️ Configure Server Address' on this node.";
+    container.appendChild(cfgDesc);
 
     // Mac Server Quick Verification
     const srvHead = document.createElement("h4");
@@ -223,74 +231,47 @@ function installHelpBadge(node) {
     });
 }
 
-function installModelFetchButton(node) {
+function installActionButtons(node) {
+    // 1. Configure Server URL button
+    node.addWidget("button", "⚙️ Configure Mac Server", null, async () => {
+        await promptConfigureServerUrl();
+    });
+
+    // 2. Fetch Models button
     node.addWidget("button", "🔄 Fetch Models from Server", null, async () => {
-        const serverUrlWidget = node.widgets?.find(w => w.name === "server_url");
         const modelNameWidget = node.widgets?.find(w => w.name === "model_name");
         if (!modelNameWidget) return;
 
-        const serverUrl = (serverUrlWidget?.value || "http://127.0.0.1:8288").trim().replace(/\/+$/, "");
-
         try {
-            let data = null;
-            let proxyErrorDetail = null;
-
-            // 1. First try ComfyUI backend proxy (immune to browser CORS & LAN restrictions)
-            try {
-                const proxyUrl = `/macoffload/models?server_url=${encodeURIComponent(serverUrl)}`;
-                const proxyRes = await fetch(proxyUrl);
-                if (proxyRes.ok) {
-                    data = await proxyRes.json();
-                } else {
-                    const errBody = await proxyRes.json().catch(() => null);
-                    if (errBody?.error) {
-                        proxyErrorDetail = errBody.error;
-                    } else if (proxyRes.status !== 404) {
-                        proxyErrorDetail = `Proxy HTTP ${proxyRes.status}: ${proxyRes.statusText}`;
-                    }
-                }
-            } catch (err) {
-                // ComfyUI backend proxy request failure
-                proxyErrorDetail = err?.message || null;
+            const proxyRes = await fetch("/macoffload/models");
+            if (!proxyRes.ok) {
+                const errBody = await proxyRes.json().catch(() => null);
+                const msg = errBody?.error || `HTTP ${proxyRes.status}: ${proxyRes.statusText}`;
+                throw new Error(msg);
             }
 
-            // 2. Direct browser fetch fallback (if backend proxy is 404 or unconfigured)
-            if (!data) {
-                // If the proxy reached the target and reported a concrete connection refusal / timeout, surface it directly
-                if (proxyErrorDetail && !proxyErrorDetail.includes("404")) {
-                    throw new Error(proxyErrorDetail);
-                }
-
-                try {
-                    const res = await fetch(`${serverUrl}/v1/models`);
-                    if (!res.ok) {
-                        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-                    }
-                    data = await res.json();
-                } catch (directErr) {
-                    const detail = proxyErrorDetail || directErr.message;
-                    throw new Error(detail);
-                }
-            }
-
-            if (data.error) {
-                throw new Error(data.error);
-            }
-
+            const data = await proxyRes.json();
             const allModels = data.models || [];
             if (!allModels.length) {
-                alert(`Connected to ${serverUrl}, but no models were found in the server's models directory.`);
+                alert("Connected to Mac server, but no models were found in the server's models directory.");
                 return;
             }
 
             const isFlux = node.comfyClass?.includes("CLIPTextEncode");
-            const filtered = allModels.filter(m => {
-                const type = data.model_types?.[m];
-                return type ? (isFlux ? type === "flux_klein" : type === "qwen_image") : true;
-            });
-            const targetList = filtered.length > 0 ? filtered : allModels;
+            const isQwen = node.comfyClass?.includes("QwenImage");
 
+            let filtered = allModels;
+            if (isFlux) {
+                const matched = allModels.filter(m => m.toLowerCase().includes("flux"));
+                if (matched.length > 0) filtered = matched;
+            } else if (isQwen) {
+                const matched = allModels.filter(m => m.toLowerCase().includes("qwen"));
+                if (matched.length > 0) filtered = matched;
+            }
+
+            const targetList = filtered.length > 0 ? filtered : allModels;
             const currentValue = modelNameWidget.value;
+
             modelNameWidget.options = modelNameWidget.options || {};
             modelNameWidget.options.values = targetList;
 
@@ -307,17 +288,13 @@ function installModelFetchButton(node) {
                 app.extensionManager.toast.add({
                     severity: "success",
                     summary: "MacOffload",
-                    detail: `Fetched ${targetList.length} models from ${serverUrl}!`,
+                    detail: `Fetched ${targetList.length} models from server!`,
                     life: 3000,
                 });
             }
         } catch (err) {
-            let extraHint = "";
-            if (serverUrl.includes("127.0.0.1") || serverUrl.includes("localhost")) {
-                extraHint = "\n\n💡 Tip: Target is currently set to 127.0.0.1 (local). If te-server is running on a remote Mac, please change 'server_url' to your Mac's LAN address (e.g. http://<mac-ip>:8288).";
-            }
             alert(
-                `Failed to fetch models from ${serverUrl}:\n${err.message}${extraHint}`
+                `Failed to fetch models:\n${err.message}\n\nTip: Click '⚙️ Configure Mac Server' to verify or update your Mac's LAN IP address.`
             );
         }
     });
@@ -325,14 +302,39 @@ function installModelFetchButton(node) {
 
 app.registerExtension({
     name: "MacOffload.HelpBadge",
+    async setup() {
+        // Register setting in ComfyUI Settings panel if supported
+        if (app.ui?.settings?.addSetting) {
+            app.ui.settings.addSetting({
+                id: "MacOffload.ServerUrl",
+                name: "MacOffload: Remote macOS Server Address",
+                type: "text",
+                defaultValue: "http://127.0.0.1:8288",
+                tooltip: "Base URL of the remote macOS te-server. Saved locally on disk, not inside workflows.",
+                onChange: async (newVal) => {
+                    if (newVal) {
+                        try {
+                            await saveServerUrl(newVal);
+                        } catch (e) {
+                            console.error("[MacOffload] Failed to persist server URL from settings:", e);
+                        }
+                    }
+                },
+            });
+        }
+    },
     nodeCreated(node) {
         if (!isMacOffloadNode(node)) return;
         installHelpBadge(node);
-        installModelFetchButton(node);
+        installActionButtons(node);
     },
     getNodeMenuItems(node) {
         if (!isMacOffloadNode(node)) return [];
         return [
+            {
+                content: "⚙️ Configure Mac Server Address",
+                callback: () => promptConfigureServerUrl(),
+            },
             {
                 content: "About this node ❓",
                 callback: () => openHelpDialog(node),

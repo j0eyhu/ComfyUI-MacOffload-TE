@@ -4,8 +4,8 @@ from ._qwen_image_helpers import process_qwen_image_encode
 class RemoteTextEncodeQwenImage21:
     """
     Remote Text & Vision Encoder node for Qwen-Image-2.1.
-    Delegates heavy vision-language model inference to macOS (Apple Silicon MPS),
-    avoiding VRAM swapping on local Windows GPU.
+    Delegates heavy vision-language model inference to macOS (Apple Silicon MPS)
+    via safe safetensors streams, avoiding VRAM swapping on local Windows GPU.
     """
 
     DESCRIPTION = (
@@ -18,14 +18,6 @@ class RemoteTextEncodeQwenImage21:
     def INPUT_TYPES(cls):
         inputs = {
             "required": {
-                "server_url": (
-                    "STRING",
-                    {
-                        "default": "http://127.0.0.1:8288",
-                        "multiline": False,
-                        "tooltip": "Base URL of the remote macOS server (e.g. http://192.168.1.100:8288).",
-                    },
-                ),
                 "model_name": (
                     [
                         "Qwen-Image-2.1-Text-Encoder-Heretic",
@@ -88,7 +80,6 @@ class RemoteTextEncodeQwenImage21:
 
     def execute(
         self,
-        server_url: str,
         prompt: str,
         negative_prompt: str,
         model_name: str = "Qwen-Image-2.1-Text-Encoder-Heretic",
@@ -97,7 +88,6 @@ class RemoteTextEncodeQwenImage21:
         **kwargs,
     ):
         return process_qwen_image_encode(
-            server_url=server_url,
             prompt=prompt,
             negative_prompt=negative_prompt,
             model_name=model_name,

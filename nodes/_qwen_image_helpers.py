@@ -1,7 +1,7 @@
 import math
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import torch
-from ._network_client import send_binary_encode_request
+from ._network_client import send_safetensors_request
 
 try:
     import comfy.utils
@@ -14,17 +14,17 @@ except ImportError:
 
 
 def process_qwen_image_encode(
-    server_url: str,
     prompt: str,
     negative_prompt: str,
     model_name: str = "Qwen-Image-2.1-Text-Encoder-Heretic",
     vae: Any = None,
     resolution: int = 1024,
+    server_url: Optional[str] = None,
     **kwargs: Any,
 ) -> Tuple[Any, Any, Dict[str, Any]]:
     """
     Core processing logic for remote Qwen Image 2.1 multimodal conditioning.
-    Preprocesses reference images, prepares binary payload, communicates with
+    Preprocesses reference images, prepares safetensors payload, communicates with
     remote Mac server, attaches reference latents, and generates WanVAE latents.
     """
     ref_latents: List[Any] = []
@@ -77,25 +77,52 @@ def process_qwen_image_encode(
 
     keep_vision = len(ref_latents) == 0
 
-    # 2. Build serialized binary payload
-    payload = {
+    # 2. Build serialized pure data safetensors payload
+    tensors_payload: Dict[str, torch.Tensor] = {}
+    for idx, img in enumerate(images_vl):
+        tensors_payload[f"image_{idx}"] = img.contiguous()
+
+    meta_payload = {
+        "model_type": "qwen_image",
         "prompt": prompt if prompt is not None else "",
         "negative_prompt": negative_prompt if negative_prompt is not None else "",
-        "images_vl": images_vl,
         "keep_vision": keep_vision,
+        "image_count": len(images_vl),
     }
 
-    # 3. Post to Mac server endpoint
+    # 3. Post to Mac server endpoint via safetensors
     route = f"/v1/encode/{model_name}"
-    result_data = send_binary_encode_request(server_url, route, payload)
+    res_tensors, res_meta = send_safetensors_request(
+        route=route,
+        tensors=tensors_payload,
+        meta=meta_payload,
+        server_url=server_url,
+    )
 
-    if "positive" not in result_data or "negative" not in result_data:
+    if "positive_embeds" not in res_tensors or "negative_embeds" not in res_tensors:
         raise ValueError(
-            f"[MacOffload] Malformed response from '{route}': missing 'positive' or 'negative'."
+            f"[MacOffload] Malformed safetensors response from '{route}': missing positive/negative embeddings."
         )
 
-    positive = result_data["positive"]
-    negative = result_data["negative"]
+    pos_extra: Dict[str, Any] = {}
+    neg_extra: Dict[str, Any] = {}
+
+    pos_slots = res_meta.get("pos_slots", [])
+    if pos_slots:
+        pos_extra["image_slots"] = pos_slots
+
+    neg_slots = res_meta.get("neg_slots", [])
+    if neg_slots:
+        neg_extra["image_slots"] = neg_slots
+
+    if "positive_mask" in res_tensors:
+        pos_extra["attention_mask"] = res_tensors["positive_mask"]
+
+    if "negative_mask" in res_tensors:
+        neg_extra["attention_mask"] = res_tensors["negative_mask"]
+
+    positive = [[res_tensors["positive_embeds"], pos_extra]]
+    negative = [[res_tensors["negative_embeds"], neg_extra]]
 
     # 4. Inject reference_latents into conditioning dictionaries
     if len(ref_latents) > 0 and node_helpers is not None:

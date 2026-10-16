@@ -16,7 +16,7 @@ When running state-of-the-art diffusion pipelines (such as Flux Klein or Qwen Im
 - **Higher Direct Output Resolutions**: Reclaiming precious VRAM headroom allows the local GPU to allocate maximum memory to the diffusion transformer (DiT) and VAE, enabling direct generation at substantially higher native image resolutions and larger latent dimensions without OOM errors.
 - **Dual-Device Synergy**:
   - **Client (Windows)**: Dedicates 100% of GPU compute and VRAM to diffusion backbone sampling and VAE decoding.
-  - **Server (macOS / Apple Silicon)**: Keeps large text encoders resident in Unified Memory (MPS), serving tokenization and embedding forward passes over low-latency binary tensor streaming.
+  - **Server (macOS / Apple Silicon)**: Keeps large text encoders resident in Unified Memory (MPS), serving tokenization and embedding forward passes over low-latency, safe safetensors streaming.
 
 ---
 
@@ -28,21 +28,23 @@ When running state-of-the-art diffusion pipelines (such as Flux Klein or Qwen Im
 |                      Windows Client                         |
 |  [ComfyUI]                                                  |
 |   └── Custom Node (Facade + Helpers)                        |
+|        ├── Read server address from local disk config       |
 |        ├── Pack prompt text & optional reference images     |
-|        ├── Serialize to PyTorch binary stream (in-memory)   |
+|        ├── Serialize to safe, data-only safetensors stream  |
 |        └── HTTP POST (application/octet-stream)             |
 +------------------------------+------------------------------+
                                |
                    Local Area Network (LAN)
-                   Low-latency Binary Stream
+                   Low-latency safetensors Stream
                                |
 +------------------------------v------------------------------+
 |                     macOS Server (MPS)                      |
 |  [FastAPI Bridge]                                           |
 |   ├── Route: /v1/encode/{model_name}                        |
+|   ├── Parse safetensors payload (no pickle / no RCE risk)   |
 |   ├── Dynamic Model Pool (Auto-discovery + LRU Eviction)    |
 |   ├── Direct Accelerated MPS Loading (safetensors mmap)     |
-|   └── Return serialized Conditioning & Latent tensors       |
+|   └── Return serialized Conditioning tensors (safetensors)  |
 +-------------------------------------------------------------+
 ```
 
@@ -54,14 +56,14 @@ sequenceDiagram
     participant Srv as macOS FastAPI Server
     participant MPS as Apple Silicon MPS Pool
 
-    Win->>Srv: POST /v1/encode/{model_name} (Binary Payload)
+    Win->>Srv: POST /v1/encode/{model_name} (safetensors Payload)
     Note over Srv: Dynamic Model Manager checks resident pool
     alt Model Not In Unified Memory
         Srv->>MPS: Direct accelerated load into Unified Memory (bfloat16)
     end
     Srv->>MPS: Execute Forward Pass (Tokenization & Embeddings)
     MPS-->>Srv: Return Conditioning / Latent Tensors
-    Srv-->>Win: HTTP 200 (Serialized PyTorch Binary Stream)
+    Srv-->>Win: HTTP 200 (Serialized safetensors Binary Stream)
     Note over Win: Inject conditioning into diffusion sampling
 ```
 
@@ -90,10 +92,17 @@ sequenceDiagram
 2. Restart ComfyUI. The nodes will be available under category:
    `⚡ MacOffload/Conditioning`
 
-3. **Node Controls & UI Features**:
-   - **🔄 Fetch Models from Server**: Click this button on any MacOffload node to query the Mac server's `./models` directory and populate the `model_name` dropdown with available models.
-   - **Saved Workflow Memory**: The node remembers the previously selected model. When loading an existing workflow, the saved model name is preserved automatically without needing to click fetch again.
-   - **❓ Help Badge**: Click the `?` icon in the node title bar (or right-click the node and select **"About this node ❓"**) to view full parameter descriptions, tooltips, and server verification hints.
+3. **Configuring Mac Server Address**:
+   - The Mac server address is saved locally on disk (`macoffload_config.json`) and is **never** embedded inside shared workflow files (protecting users from SSRF and untrusted redirects).
+   - Configure it in two ways:
+     - **In ComfyUI Settings**: Open ComfyUI Settings (⚙️ icon) and set `MacOffload: Remote macOS Server Address`.
+     - **On the Node**: Click the `⚙️ Configure Mac Server` button directly on any MacOffload node.
+
+4. **Node Controls & UI Features**:
+   - **⚙️ Configure Mac Server**: Opens a dialog to view or change the remote macOS server address saved on your local machine.
+   - **🔄 Fetch Models from Server**: Queries the remote Mac server using your saved address and populates the `model_name` dropdown.
+   - **Saved Workflow Memory**: The node preserves selected models across workflow reloads.
+   - **❓ Help Badge**: Click the `?` icon in the node title bar (or right-click the node and select **"About this node ❓"**) to view diagnostics and usage information.
 
 ---
 
@@ -177,7 +186,6 @@ python server.py --max-models 1 --idle-timeout 300
 - **Category**: `⚡ MacOffload/Conditioning`
 - **Description**: Drop-in replacement for native CLIPTextEncode in Flux.2 Klein workflows.
 - **Inputs**:
-  - `server_url` *(STRING)*: Base URL of the macOS server (e.g. `http://192.168.1.100:8288`).
   - `model_name` *(COMBO)*: Target model folder name (e.g. `flux2-klein-4b-uncensored-text-encoder`).
   - `text` *(STRING)*: Positive or negative text prompt.
 - **Outputs**:
@@ -190,7 +198,6 @@ python server.py --max-models 1 --idle-timeout 300
 - **Category**: `⚡ MacOffload/Conditioning`
 - **Description**: Multimodal text and multi-image reference encoder for Qwen-Image-2.1.
 - **Inputs**:
-  - `server_url` *(STRING)*: Base URL of the macOS server.
   - `model_name` *(COMBO)*: Target model folder name (e.g. `Qwen-Image-2.1-Text-Encoder-Heretic`).
   - `prompt` *(STRING)*: Positive text prompt.
   - `negative_prompt` *(STRING)*: Negative text prompt.
@@ -222,8 +229,7 @@ python server.py --max-models 1 --idle-timeout 300
       "flux2-klein-9b-uncensored-text-encoder": "flux_klein",
       "Qwen-Image-2.1-Text-Encoder-Heretic": "qwen_image"
     },
-    "resident_models": ["flux2-klein-4b-uncensored-text-encoder"],
-    "models_dir": "/Users/user/models"
+    "resident_models": ["flux2-klein-4b-uncensored-text-encoder"]
   }
   ```
 
@@ -237,7 +243,6 @@ python server.py --max-models 1 --idle-timeout 300
     "dtype": "torch.bfloat16",
     "max_models": 1,
     "idle_timeout": 0,
-    "models_dir": "/Users/user/models",
     "active_models": ["flux2-klein-4b-uncensored-text-encoder"],
     "discovered_models": [
       "flux2-klein-4b-uncensored-text-encoder",
@@ -250,8 +255,8 @@ python server.py --max-models 1 --idle-timeout 300
 ### Dynamic Encoding
 - **Endpoint**: `POST /v1/encode/{model_name}`
 - **Headers**: `Content-Type: application/octet-stream`
-- **Body**: In-memory PyTorch serialized binary dictionary containing prompt strings and tensor lists.
-- **Response**: Serialized PyTorch binary dictionary matching ComfyUI output contracts.
+- **Body**: Non-executable safetensors binary stream containing prompt text, options, and input tensors.
+- **Response**: Safetensors binary stream containing conditioning tensors and pooled representations.
 
 ### Manual Memory Eviction
 - **Endpoint**: `POST /v1/unload`

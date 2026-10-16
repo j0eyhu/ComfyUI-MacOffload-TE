@@ -1,7 +1,6 @@
 # encoders/qwen_image.py
 import os
 import time
-import traceback
 from typing import Any, Dict, List
 import torch
 from torchvision.transforms.functional import to_pil_image

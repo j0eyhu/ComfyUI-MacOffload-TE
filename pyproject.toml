@@ -1,10 +1,11 @@
 [project]
 name = "comfyui-macoffload-te"
 version = "1.0.0"
-description = "Offload heavy Text Encoders (Flux Klein, Qwen Image 2.1) to remote macOS (Apple Silicon MPS) via binary tensor streaming."
+description = "Offload heavy Text Encoders (Flux Klein, Qwen Image 2.1) to remote macOS (Apple Silicon MPS) via safe safetensors streaming."
 dependencies = [
     "requests",
     "torch",
+    "safetensors",
 ]
 license = { text = "MIT" }
 readme = "README.md"

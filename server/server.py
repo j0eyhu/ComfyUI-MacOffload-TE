@@ -1,8 +1,9 @@
 # server.py
 import argparse
 import asyncio
-import io
+import json
 import os
+import struct
 import sys
 import traceback
 from contextlib import asynccontextmanager
@@ -18,9 +19,33 @@ if "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in os.environ:
     os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
 
 import torch
+import safetensors.torch
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import Response, JSONResponse
+
+
+def deserialize_safetensors_request(buf: bytes):
+    if len(buf) < 8:
+        raise ValueError("Payload buffer too short for safetensors.")
+    header_size = struct.unpack("<Q", buf[:8])[0]
+    if len(buf) < 8 + header_size:
+        raise ValueError("Malformed safetensors buffer: truncated header.")
+    header_raw = json.loads(buf[8 : 8 + header_size].decode("utf-8"))
+    raw_meta = header_raw.get("__metadata__", {})
+    meta = json.loads(raw_meta.get("meta", "{}"))
+    tensors = safetensors.torch.load(buf)
+    return tensors, meta
+
+
+def serialize_safetensors_response(tensors: dict, meta: dict) -> bytes:
+    clean_tensors = {
+        k: v.detach().cpu().contiguous()
+        for k, v in tensors.items()
+        if isinstance(v, torch.Tensor)
+    }
+    wrapped_meta = {"meta": json.dumps(meta)}
+    return safetensors.torch.save(clean_tensors, metadata=wrapped_meta)
 
 # Ensure current server directory is on sys.path regardless of execution working directory
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +53,7 @@ if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 
 import config
-from model_manager import DynamicModelManager, ENCODER_REGISTRY
+from model_manager import DynamicModelManager
 
 # Parse CLI arguments with fallback to config defaults
 parser = argparse.ArgumentParser(description="ComfyUI Condition Bridge Server")
@@ -157,7 +182,6 @@ async def health_check():
             "dtype": str(config.DTYPE),
             "max_models": model_manager.max_models,
             "idle_timeout": model_manager.idle_timeout,
-            "models_dir": config.MODELS_DIR,
             "active_models": list(model_manager.pool.keys()),
             "discovered_models": list(model_manager.discovered_models.keys()),
         }
@@ -178,7 +202,6 @@ async def list_models():
             "models": models,
             "model_types": model_types,
             "resident_models": list(model_manager.pool.keys()),
-            "models_dir": config.MODELS_DIR,
         }
     )
 
@@ -186,24 +209,77 @@ async def list_models():
 @app.post("/v1/encode/{model_name}")
 async def encode_dynamic(model_name: str, request: Request):
     """
-    Generic endpoint routing requests to the specified registered encoder.
+    Generic endpoint routing requests to the specified registered encoder using
+    safe, non-executable safetensors binary streams.
     """
     try:
         body = await request.body()
-        payload = torch.load(io.BytesIO(body), weights_only=False)
+        tensors, meta = deserialize_safetensors_request(body)
 
         # Acquire loaded encoder from pool
         encoder = await model_manager.get_encoder(model_name)
 
-        # Execute encoder forward pass inside worker thread
-        result = await asyncio.to_thread(encoder.encode, **payload)
+        model_type = meta.get("model_type")
+        encoder_name = type(encoder).__name__.lower()
 
-        # Serialize results to binary stream
-        buffer = io.BytesIO()
-        torch.save(result, buffer)
+        if model_type == "flux_klein" or "flux" in encoder_name:
+            prompt = meta.get("prompt", "")
+            result = await asyncio.to_thread(encoder.encode, prompt=prompt)
 
+            cond = result["conditioning"][0][0].contiguous()
+            pooled = result["conditioning"][0][1]["pooled_output"].contiguous()
+            resp_tensors = {
+                "conditioning": cond,
+                "pooled_output": pooled,
+            }
+            resp_meta = {"type": "flux_klein"}
+
+        elif model_type == "qwen_image" or "qwen" in encoder_name:
+            prompt = meta.get("prompt", "")
+            negative_prompt = meta.get("negative_prompt", "")
+            keep_vision = meta.get("keep_vision", True)
+            image_count = meta.get("image_count", 0)
+            images_vl = [
+                tensors[f"image_{i}"]
+                for i in range(image_count)
+                if f"image_{i}" in tensors
+            ]
+
+            result = await asyncio.to_thread(
+                encoder.encode,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                images_vl=images_vl,
+                keep_vision=keep_vision,
+            )
+
+            pos_cond = result["positive"]
+            neg_cond = result["negative"]
+
+            resp_tensors = {
+                "positive_embeds": pos_cond[0][0].contiguous(),
+                "negative_embeds": neg_cond[0][0].contiguous(),
+            }
+
+            pos_extra = pos_cond[0][1] if len(pos_cond[0]) > 1 else {}
+            neg_extra = neg_cond[0][1] if len(neg_cond[0]) > 1 else {}
+
+            if "attention_mask" in pos_extra:
+                resp_tensors["positive_mask"] = pos_extra["attention_mask"].contiguous()
+            if "attention_mask" in neg_extra:
+                resp_tensors["negative_mask"] = neg_extra["attention_mask"].contiguous()
+
+            resp_meta = {
+                "type": "qwen_image",
+                "pos_slots": pos_extra.get("image_slots", []),
+                "neg_slots": neg_extra.get("image_slots", []),
+            }
+        else:
+            raise ValueError(f"Unknown or unsupported encoder type: {type(encoder)}")
+
+        response_bytes = serialize_safetensors_response(resp_tensors, resp_meta)
         return Response(
-            content=buffer.getvalue(),
+            content=response_bytes,
             media_type="application/octet-stream"
         )
 

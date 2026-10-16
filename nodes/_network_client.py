@@ -1,35 +1,83 @@
-import io
-from typing import Any, Dict, Tuple
+import json
+import struct
+from typing import Any, Dict, Optional, Tuple
 import requests
 import torch
+import safetensors.torch
+from ._config import get_server_url
 
 
-def send_binary_encode_request(
-    server_url: str,
-    route: str,
-    payload: Dict[str, Any],
-    timeout: Tuple[int, int] = (10, 300),
-) -> Dict[str, Any]:
+def serialize_safetensors_payload(
+    tensors: Optional[Dict[str, torch.Tensor]] = None,
+    meta: Optional[Dict[str, Any]] = None,
+) -> bytes:
     """
-    Serializes a dictionary payload into a PyTorch binary stream and sends it
-    to the remote macOS server via HTTP POST.
+    Serializes pure tensors and JSON metadata into a safe, non-executable
+    safetensors binary buffer.
+    """
+    tensors = tensors or {}
+    meta = meta or {}
+
+    # Standardize tensors: must be contiguous tensors on CPU
+    clean_tensors = {}
+    for k, v in tensors.items():
+        if isinstance(v, torch.Tensor):
+            clean_tensors[k] = v.detach().cpu().contiguous()
+
+    # safetensors header metadata requires string values; wrap metadata dictionary in JSON string
+    wrapped_meta = {"meta": json.dumps(meta)}
+    return safetensors.torch.save(clean_tensors, metadata=wrapped_meta)
+
+
+def deserialize_safetensors_payload(
+    buf: bytes,
+) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
+    """
+    Safely deserializes a safetensors binary buffer into pure numerical tensors
+    and JSON metadata. Incapable of executing arbitrary code.
+    """
+    if len(buf) < 8:
+        raise ValueError("Buffer too small to be a valid safetensors stream.")
+
+    # Read the 8-byte uint64 header size
+    header_size = struct.unpack("<Q", buf[:8])[0]
+    if len(buf) < 8 + header_size:
+        raise ValueError("Malformed safetensors buffer: truncated header.")
+
+    header_raw = json.loads(buf[8 : 8 + header_size].decode("utf-8"))
+    raw_meta = header_raw.get("__metadata__", {})
+    meta = json.loads(raw_meta.get("meta", "{}"))
+
+    tensors = safetensors.torch.load(buf)
+    return tensors, meta
+
+
+def send_safetensors_request(
+    route: str,
+    tensors: Optional[Dict[str, torch.Tensor]] = None,
+    meta: Optional[Dict[str, Any]] = None,
+    server_url: Optional[str] = None,
+    timeout: Tuple[int, int] = (10, 300),
+) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
+    """
+    Sends pure numerical tensors and metadata to the remote macOS server via HTTP POST
+    using the safetensors format.
 
     Args:
-        server_url: Base server URL, e.g. "http://192.168.1.100:8288"
-        route: API route path, e.g. "/v1/encode/flux_klein_4b"
-        payload: Dictionary containing prompts and optional vision tensors
+        route: API route path, e.g. "/v1/encode/flux2-klein-4b-uncensored-text-encoder"
+        tensors: Optional dictionary of named torch.Tensor inputs (e.g. vision references)
+        meta: Optional dictionary of JSON-serializable parameters (prompts, options)
+        server_url: Base server URL. If None, reads from saved local disk configuration.
         timeout: Tuple of (connect_timeout, read_timeout) in seconds
 
     Returns:
-        Deserialized dictionary containing conditioning and latent tensors.
+        Tuple of (tensors_dict, metadata_dict) safely decoded from response.
     """
-    clean_base = server_url.strip().rstrip("/")
+    base_url = (server_url or get_server_url()).strip().rstrip("/")
     clean_route = "/" + route.strip().lstrip("/")
-    endpoint = f"{clean_base}{clean_route}"
+    endpoint = f"{base_url}{clean_route}"
 
-    buffer = io.BytesIO()
-    torch.save(payload, buffer)
-    binary_data = buffer.getvalue()
+    binary_data = serialize_safetensors_payload(tensors=tensors, meta=meta)
 
     try:
         response = requests.post(
@@ -44,7 +92,7 @@ def send_binary_encode_request(
             f"[MacOffload] Failed to connect to server at '{endpoint}'.\n"
             f"Diagnostics:\n"
             f"  1. Is the Mac server running? (python server.py)\n"
-            f"  2. Is the IP and port '{server_url}' correct and reachable across your LAN?\n"
+            f"  2. Is the IP and port '{base_url}' correct and reachable across your LAN?\n"
             f"  3. Check if macOS firewall or router is blocking port {endpoint.split(':')[-1].split('/')[0]}.\n"
             f"Details: {err}"
         ) from err
@@ -74,10 +122,10 @@ def send_binary_encode_request(
         ) from err
 
     try:
-        result_data = torch.load(io.BytesIO(response.content), weights_only=False)
+        res_tensors, res_meta = deserialize_safetensors_payload(response.content)
     except Exception as err:
         raise RuntimeError(
-            f"[MacOffload] Failed to deserialize tensor response from '{endpoint}': {err}"
+            f"[MacOffload] Failed to deserialize safetensors response from '{endpoint}': {err}"
         ) from err
 
-    return result_data
+    return res_tensors, res_meta

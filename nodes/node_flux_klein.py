@@ -5,7 +5,7 @@ class RemoteCLIPTextEncode:
     """
     Remote CLIP Text Encoder node for Flux Klein models.
     Delegates tokenization and embedding forward pass to macOS (Apple Silicon MPS)
-    via binary tensor streams, saving local GPU VRAM.
+    via safe safetensors streams, saving local GPU VRAM.
     """
 
     DESCRIPTION = (
@@ -17,14 +17,6 @@ class RemoteCLIPTextEncode:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "server_url": (
-                    "STRING",
-                    {
-                        "default": "http://127.0.0.1:8288",
-                        "multiline": False,
-                        "tooltip": "Base URL of the remote macOS server (e.g. http://192.168.1.100:8288).",
-                    },
-                ),
                 "model_name": (
                     [
                         "flux2-klein-4b-uncensored-text-encoder",
@@ -51,8 +43,9 @@ class RemoteCLIPTextEncode:
     FUNCTION = "encode"
     CATEGORY = "⚡ MacOffload/Conditioning"
 
-    def encode(self, server_url, model_name, text):
-        return process_flux_klein_encode(server_url, model_name, text)
+    def encode(self, model_name: str, text: str, **kwargs):
+        # kwargs gracefully swallows legacy server_url widget from older saved workflows
+        return process_flux_klein_encode(model_name=model_name, text=text)
 
 
 NODE_CLASS_MAPPINGS = {
