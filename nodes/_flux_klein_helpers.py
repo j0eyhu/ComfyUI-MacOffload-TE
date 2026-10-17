@@ -13,8 +13,14 @@ def process_flux_klein_encode(
     Prepares pure JSON metadata, invokes safetensors network client,
     and returns ComfyUI conditioning tuple.
     """
+    model_name_lower = model_name.lower() if model_name else ""
+    is_flux3 = (
+        "flux3" in model_name_lower
+        or "flux-3" in model_name_lower
+        or ("qwen3" in model_name_lower and "4b" in model_name_lower)
+    )
     meta = {
-        "model_type": "flux_klein",
+        "model_type": "flux3_klein" if is_flux3 else "flux_klein",
         "prompt": text if text is not None else "",
     }
 

@@ -10,21 +10,36 @@ import torch
 import config
 from encoders.base import BaseEncoder
 from encoders.qwen_image import QwenImage21Encoder
-from encoders.flux_klein import FluxKleinEncoder, FluxKlein4BEncoder, FluxKlein9BEncoder
+from encoders.flux_klein import FluxKleinEncoder
+from encoders.flux3_klein import Flux3KleinEncoder
 
-# Static fallback registry of supported encoder classes
-ENCODER_REGISTRY: Dict[str, Type[BaseEncoder]] = {
-    config.QWEN_FOLDER_NAME: QwenImage21Encoder,
-    config.FLUX_KLEIN_4B_FOLDER_NAME: FluxKlein4BEncoder,
-    config.FLUX_KLEIN_9B_FOLDER_NAME: FluxKlein9BEncoder,
+# Mapping of detected model type strings to their respective encoder implementations
+ENCODER_CLASSES: Dict[str, Type[BaseEncoder]] = {
+    "flux_klein": FluxKleinEncoder,
+    "flux3_klein": Flux3KleinEncoder,
+    "qwen_image": QwenImage21Encoder,
 }
 
 
 def detect_model_type(folder_path: str) -> str:
     """
-    Infers whether a model directory corresponds to Flux Klein or Qwen Image
+    Infers whether a model directory corresponds to FLUX.2 Klein, FLUX.3 Klein, or Qwen Image
     by inspecting config.json or heuristic folder names.
+
+    Model Distinctions:
+      - FLUX.2 Klein: DiT variants (4B / 9B) with Qwen3 CausalLM text encoders.
+      - FLUX.3 Klein: Single 5.6B DiT with Qwen3-VL-4B text encoder (hidden_size=2560).
+      - Qwen Image: Multimodal Qwen3-VL text/image encoder (hidden_size=4096).
     """
+    base_lower = os.path.basename(folder_path).lower()
+
+    # 1. Explicit FLUX.3 / Qwen3-VL-4B folder indicators take precedence
+    if "flux3" in base_lower or "flux-3" in base_lower:
+        return "flux3_klein"
+    if "qwen3" in base_lower and "4b" in base_lower and ("vl" in base_lower or "heretic" in base_lower):
+        return "flux3_klein"
+
+    # 2. Inspect config.json
     config_file = os.path.join(folder_path, "config.json")
     if os.path.isfile(config_file):
         try:
@@ -33,16 +48,33 @@ def detect_model_type(folder_path: str) -> str:
             archs = [str(a).lower() for a in data.get("architectures", [])]
             mtype = str(data.get("model_type", "")).lower()
 
-            if any("qwen2_5_vl" in a or "qwen2vl" in a or "qwen3_vl" in a or "qwen3vl" in a or "imagetext" in a for a in archs) or "vl" in mtype:
+            # Qwen3-VL: Distinguish FLUX.3 Klein (4B text encoder, hidden_size 2560)
+            # from Qwen-Image (8B text encoder, hidden_size 4096)
+            if any("qwen3_vl" in a or "qwen3vl" in a for a in archs) or mtype in ("qwen3_vl", "qwen3vl"):
+                hidden_size = data.get("hidden_size") or data.get("text_config", {}).get("hidden_size")
+                if hidden_size == 2560:
+                    return "flux3_klein"
+                elif hidden_size in (4096, 8192):
+                    return "qwen_image"
+                else:
+                    return "flux3_klein" if ("4b" in base_lower or "flux" in base_lower or "klein" in base_lower) else "qwen_image"
+
+            # Other VL models (Qwen2-VL, Qwen2.5-VL, ImageText) belong to qwen_image
+            if any("qwen2_5_vl" in a or "qwen2vl" in a or "imagetext" in a for a in archs) or "vl" in mtype:
                 return "qwen_image"
+
+            # CausalLM / Qwen text models -> FLUX.2 Klein
             if any("causallm" in a or "qwen" in a or "flux" in a for a in archs) or "qwen" in mtype:
                 return "flux_klein"
         except Exception:
             pass
 
-    # Fallback heuristic based on folder name
-    base_lower = os.path.basename(folder_path).lower()
-    if "qwen" in base_lower and ("image" in base_lower or "vl" in base_lower or "heretic" in base_lower):
+    # 3. Fallback heuristic based on folder name
+    if "image" in base_lower:
+        return "qwen_image"
+    if ("qwen3" in base_lower and "4b" in base_lower) or "flux3" in base_lower or "flux-3" in base_lower:
+        return "flux3_klein"
+    if "qwen" in base_lower and ("vl" in base_lower or "heretic" in base_lower):
         return "qwen_image"
     if "flux" in base_lower or "klein" in base_lower:
         return "flux_klein"
@@ -88,81 +120,57 @@ class DynamicModelManager:
     def scan_models(self) -> Dict[str, Dict[str, Any]]:
         """
         Scans config.MODELS_DIR and discovers available encoder model folders.
-        Also registers configured defaults and shorthand aliases.
+        No hardcoded paths or dummy entries needed.
         """
         discovered: Dict[str, Dict[str, Any]] = {}
-
-        # 1. Scan subdirectories in MODELS_DIR
         models_dir = config.MODELS_DIR
-        if os.path.isdir(models_dir):
-            for entry in sorted(os.listdir(models_dir)):
-                full_path = os.path.join(models_dir, entry)
-                if os.path.isdir(full_path):
-                    # Check if directory contains model files
-                    has_weights = any(
-                        f.endswith((".safetensors", ".bin", ".json"))
-                        for f in os.listdir(full_path)
-                    ) if os.path.exists(full_path) else False
-                    if has_weights:
-                        m_type = detect_model_type(full_path)
-                        discovered[entry] = {
-                            "name": entry,
-                            "path": full_path,
-                            "type": m_type,
-                        }
 
-        # 2. Register configured model paths if present (by folder name only)
-        for cfg_path, m_type in [
-            (config.FLUX_KLEIN_4B_PATH, "flux_klein"),
-            (config.FLUX_KLEIN_9B_PATH, "flux_klein"),
-            (config.QWEN_MODEL_PATH, "qwen_image"),
-        ]:
-            if cfg_path and os.path.exists(cfg_path):
-                folder_name = os.path.basename(cfg_path)
-                if folder_name not in discovered:
-                    discovered[folder_name] = {
-                        "name": folder_name,
-                        "path": cfg_path,
+        if not os.path.isdir(models_dir):
+            print(f"[ModelManager] Warning: MODELS_DIR '{models_dir}' does not exist or is not a directory.")
+            self.discovered_models = discovered
+            return discovered
+
+        for entry in sorted(os.listdir(models_dir)):
+            full_path = os.path.join(models_dir, entry)
+            if os.path.isdir(full_path):
+                # Check if directory contains model weights or configuration
+                has_weights = any(
+                    f.endswith((".safetensors", ".bin", ".json"))
+                    for f in os.listdir(full_path)
+                ) if os.path.exists(full_path) else False
+                if has_weights:
+                    m_type = detect_model_type(full_path)
+                    discovered[entry] = {
+                        "name": entry,
+                        "path": full_path,
                         "type": m_type,
                     }
 
-        # 3. Fallback defaults by folder name if models dir is empty
-        for default_name, cfg_path, m_type in [
-            (config.FLUX_KLEIN_4B_FOLDER_NAME, config.FLUX_KLEIN_4B_PATH, "flux_klein"),
-            (config.FLUX_KLEIN_9B_FOLDER_NAME, config.FLUX_KLEIN_9B_PATH, "flux_klein"),
-            (config.QWEN_FOLDER_NAME, config.QWEN_MODEL_PATH, "qwen_image"),
-        ]:
-            if default_name not in discovered:
-                discovered[default_name] = {
-                    "name": default_name,
-                    "path": cfg_path,
-                    "type": m_type,
-                }
-
+        print(f"[ModelManager] Scanned '{models_dir}': found {len(discovered)} model(s) {list(discovered.keys())}")
         self.discovered_models = discovered
         return discovered
 
     def get_model_list(self) -> List[str]:
-        """Returns clean list of model keys (preferring folder names)."""
+        """Returns clean list of discovered model folder names."""
         self.scan_models()
-        # Sort so real folder names come first, aliases last
-        items = list(self.discovered_models.keys())
-        return items
+        return list(self.discovered_models.keys())
 
     async def get_encoder(self, model_name: str) -> BaseEncoder:
         """
         Retrieves a loaded encoder from the pool or loads it dynamically.
-        Supports both exact folder names and legacy shorthand aliases.
+        Resolves model folder from dynamically discovered models in MODELS_DIR.
         """
+        model_name = os.path.basename(model_name.strip())
         async with self.lock:
-            # Refresh if not found
+            # Refresh if not found in cache
             if model_name not in self.discovered_models:
                 self.scan_models()
 
-            if model_name not in self.discovered_models and model_name not in ENCODER_REGISTRY:
+            if model_name not in self.discovered_models:
                 available = list(self.discovered_models.keys())
                 raise ValueError(
-                    f"Unsupported model_name: '{model_name}'. Available options on server: {available}"
+                    f"Model folder '{model_name}' not found on server. "
+                    f"Available options: {available}"
                 )
 
             # 1. Cache hit: update last used timestamp and return
@@ -184,19 +192,15 @@ class DynamicModelManager:
                     await asyncio.sleep(self.settling_delay)
 
             # 3. Cache miss: instantiate and load dynamically
-            info = self.discovered_models.get(model_name)
-            if info:
-                m_type = info["type"]
-                m_path = info["path"]
-                print(f"[ModelManager] Dynamically loading '{model_name}' (type={m_type}, path='{m_path}') on {config.DEVICE}...")
-                if m_type == "flux_klein":
-                    encoder = FluxKleinEncoder(model_path=m_path)
-                else:
-                    encoder = QwenImage21Encoder(model_path=m_path)
-            else:
-                print(f"[ModelManager] Dynamically loading fallback '{model_name}' on {config.DEVICE}...")
-                encoder_cls = ENCODER_REGISTRY[model_name]
-                encoder = encoder_cls()
+            info = self.discovered_models[model_name]
+            m_type = info["type"]
+            m_path = info["path"]
+            encoder_cls = ENCODER_CLASSES.get(m_type)
+            if not encoder_cls:
+                raise ValueError(f"No encoder implementation registered for model type '{m_type}'.")
+
+            print(f"[ModelManager] Dynamically loading '{model_name}' (type={m_type}, class={encoder_cls.__name__}) on {config.DEVICE}...")
+            encoder = encoder_cls(model_path=m_path)
 
             await asyncio.to_thread(encoder.load)
             self.pool[model_name] = ManagedModel(model_name, encoder)
@@ -247,6 +251,7 @@ class DynamicModelManager:
         """
         External eviction interface with lock protection.
         """
+        model_name = os.path.basename(model_name.strip())
         async with self.lock:
             self._evict_model_unlocked(model_name)
 

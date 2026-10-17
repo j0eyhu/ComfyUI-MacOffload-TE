@@ -63,12 +63,17 @@ def register_macoffload_routes():
                 return resp.json()
 
             raw_data = await asyncio.to_thread(_fetch)
-            # Filter strictly to model names only to avoid exposing server system paths
             models = raw_data.get("models", [])
             if not isinstance(models, list):
                 models = []
+            model_types = raw_data.get("model_types", {})
+            if not isinstance(model_types, dict):
+                model_types = {}
 
-            return web.json_response({"models": models})
+            return web.json_response({
+                "models": models,
+                "model_types": model_types,
+            })
         except requests.exceptions.RequestException as err:
             err_msg = str(err)
             if "127.0.0.1" in target_url or "localhost" in target_url:

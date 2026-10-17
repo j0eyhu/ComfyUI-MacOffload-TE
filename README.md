@@ -1,7 +1,7 @@
 # ComfyUI-MacOffload-TE ⚡
 
 > **High-Performance Cross-Platform Text Encoder Offloading for ComfyUI**  
-> Offload heavy Text Encoders (Flux.2 Klein, Qwen-Image-2.1) from your VRAM-constrained GPU (e.g. RTX 4060 8GB) to a macOS machine with Apple Silicon Unified Memory (MPS) over your local network — eliminating model swapping, boosting generation speed, and unlocking higher native image resolutions.
+> Offload heavy Text Encoders (Flux.2 Klein, Flux.3 Klein, Qwen-Image-2.1) from your VRAM-constrained GPU (e.g. RTX 4060 8GB) to a macOS machine with Apple Silicon Unified Memory (MPS) over your local network — eliminating model swapping, boosting generation speed, and unlocking higher native image resolutions.
 
 ---
 
@@ -71,11 +71,12 @@ sequenceDiagram
 
 ## 3. Supported Models
 
-| Model Folder Name | Base Architecture | Hugging Face Repository | Summary |
-| :--- | :--- | :--- | :--- |
-| `flux2-klein-4b-uncensored-text-encoder` | Qwen3-4B | [`ponpoke/flux2-klein-4b-uncensored-text-encoder`](https://huggingface.co/ponpoke/flux2-klein-4b-uncensored-text-encoder) | Uncensored text encoder variant for FLUX.2-klein 4B DiT. Processed to remove refusal vectors to prevent safety filter refusals. |
-| `flux2-klein-9b-uncensored-text-encoder` | Qwen3-8B | [`ponpoke/flux2-klein-9b-uncensored-text-encoder`](https://huggingface.co/ponpoke/flux2-klein-9b-uncensored-text-encoder) | Uncensored text encoder variant for FLUX.2-klein 9B DiT with higher parameter capacity for nuanced prompt comprehension without safety filter refusals. |
-| `Qwen-Image-2.1-Text-Encoder-Heretic` | Qwen3-VL-8B | [`pottokao/Qwen-Image-2.1-Text-Encoder-Heretic`](https://huggingface.co/pottokao/Qwen-Image-2.1-Text-Encoder-Heretic) | Abliterated "Heretic" version of the Qwen-Image-2.1 text encoder based on the Qwen3-VL-8B architecture. Removes safety alignment refusals using directional ablation on `o_proj` and `down_proj` layers while preserving functional vision-language performance. |
+| Model Folder Name | DiT Model | Text Encoder Architecture | Hugging Face Repository | Summary |
+| :--- | :--- | :--- | :--- | :--- |
+| `flux2-klein-4b-uncensored-text-encoder` | FLUX.2 Klein (4B) | Qwen3-4B | [`ponpoke/flux2-klein-4b-uncensored-text-encoder`](https://huggingface.co/ponpoke/flux2-klein-4b-uncensored-text-encoder) | Uncensored text encoder variant for FLUX.2 Klein 4B DiT. Processed to remove refusal vectors to prevent safety filter refusals. |
+| `flux2-klein-9b-uncensored-text-encoder` | FLUX.2 Klein (9B) | Qwen3-8B | [`ponpoke/flux2-klein-9b-uncensored-text-encoder`](https://huggingface.co/ponpoke/flux2-klein-9b-uncensored-text-encoder) | Uncensored text encoder variant for FLUX.2 Klein 9B DiT with higher parameter capacity for nuanced prompt comprehension without safety filter refusals. |
+| `Qwen3-VL-4b-Heretic` | FLUX.3 Klein (5.6B) | Qwen3-VL-4B | [`DreamFast/Qwen3-VL-4b-Heretic`](https://huggingface.co/DreamFast/Qwen3-VL-4b-Heretic) | Abliterated version of `Qwen3-VL-4B-Instruct` processed using the Heretic optimizer to remove refusal behaviors. Eliminates safety filter refusals while preserving underlying language comprehension and vision capabilities. |
+| `Qwen-Image-2.1-Text-Encoder-Heretic` | Qwen-Image-2.1 | Qwen3-VL-8B | [`pottokao/Qwen-Image-2.1-Text-Encoder-Heretic`](https://huggingface.co/pottokao/Qwen-Image-2.1-Text-Encoder-Heretic) | Abliterated "Heretic" version of the Qwen-Image-2.1 text encoder based on the Qwen3-VL-8B architecture. Removes safety alignment refusals using directional ablation on `o_proj` and `down_proj` layers while preserving functional vision-language performance. |
 
 ---
 
@@ -139,9 +140,10 @@ sequenceDiagram
    Place your model folders inside `MODELS_DIR`:
    ```text
    ~/models/
+   ├── Qwen-Image-2.1-Text-Encoder-Heretic/
+   ├── Qwen3-VL-4b-Heretic/
    ├── flux2-klein-4b-uncensored-text-encoder/
-   ├── flux2-klein-9b-uncensored-text-encoder/
-   └── Qwen-Image-2.1-Text-Encoder-Heretic/
+   └── flux2-klein-9b-uncensored-text-encoder/
    ```
 
 5. Launch the server:
@@ -184,12 +186,12 @@ python server.py --max-models 1 --idle-timeout 300
 ### 1. `Remote CLIP Text Encode (Flux Klein) ⚡`
 - **Class Identifier**: `MACOFFLOAD_RemoteCLIPTextEncode`
 - **Category**: `⚡ MacOffload/Conditioning`
-- **Description**: Drop-in replacement for native CLIPTextEncode in Flux.2 Klein workflows.
+- **Description**: Drop-in replacement for native CLIPTextEncode in Flux.2 Klein and Flux.3 Klein workflows.
 - **Inputs**:
-  - `model_name` *(COMBO)*: Target model folder name (e.g. `flux2-klein-4b-uncensored-text-encoder`).
+  - `model_name` *(COMBO)*: Target model folder name (e.g. `flux2-klein-4b-uncensored-text-encoder`, `Qwen3-VL-4b-Heretic`).
   - `text` *(STRING)*: Positive or negative text prompt.
 - **Outputs**:
-  - `conditioning` *(CONDITIONING)*: Formatted conditioning tuple containing stacked hidden states [batch, seq_len, 12288] and pooled representation.
+  - `conditioning` *(CONDITIONING)*: Formatted conditioning tuple containing stacked hidden states (`[batch, seq_len, 12288]` for Flux.2, `[batch, seq_len, 20480]` for Flux.3) and pooled representation.
 
 ---
 
@@ -220,16 +222,18 @@ python server.py --max-models 1 --idle-timeout 300
   ```json
   {
     "models": [
+      "Qwen-Image-2.1-Text-Encoder-Heretic",
+      "Qwen3-VL-4b-Heretic",
       "flux2-klein-4b-uncensored-text-encoder",
-      "flux2-klein-9b-uncensored-text-encoder",
-      "Qwen-Image-2.1-Text-Encoder-Heretic"
+      "flux2-klein-9b-uncensored-text-encoder"
     ],
     "model_types": {
+      "Qwen-Image-2.1-Text-Encoder-Heretic": "qwen_image",
+      "Qwen3-VL-4b-Heretic": "flux3_klein",
       "flux2-klein-4b-uncensored-text-encoder": "flux_klein",
-      "flux2-klein-9b-uncensored-text-encoder": "flux_klein",
-      "Qwen-Image-2.1-Text-Encoder-Heretic": "qwen_image"
+      "flux2-klein-9b-uncensored-text-encoder": "flux_klein"
     },
-    "resident_models": ["flux2-klein-4b-uncensored-text-encoder"]
+    "resident_models": ["Qwen3-VL-4b-Heretic"]
   }
   ```
 

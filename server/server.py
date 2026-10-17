@@ -212,6 +212,7 @@ async def encode_dynamic(model_name: str, request: Request):
     Generic endpoint routing requests to the specified registered encoder using
     safe, non-executable safetensors binary streams.
     """
+    model_name = os.path.basename(model_name.strip())
     try:
         body = await request.body()
         tensors, meta = deserialize_safetensors_request(body)
@@ -222,7 +223,7 @@ async def encode_dynamic(model_name: str, request: Request):
         model_type = meta.get("model_type")
         encoder_name = type(encoder).__name__.lower()
 
-        if model_type == "flux_klein" or "flux" in encoder_name:
+        if model_type in ("flux_klein", "flux3_klein") or "flux" in encoder_name:
             prompt = meta.get("prompt", "")
             result = await asyncio.to_thread(encoder.encode, prompt=prompt)
 
@@ -232,7 +233,7 @@ async def encode_dynamic(model_name: str, request: Request):
                 "conditioning": cond,
                 "pooled_output": pooled,
             }
-            resp_meta = {"type": "flux_klein"}
+            resp_meta = {"type": model_type or ("flux3_klein" if "flux3" in encoder_name else "flux_klein")}
 
         elif model_type == "qwen_image" or "qwen" in encoder_name:
             prompt = meta.get("prompt", "")
@@ -290,8 +291,12 @@ async def encode_dynamic(model_name: str, request: Request):
         print(f">>> [Server Error] Exception during encoding '{model_name}':")
         traceback.print_exc()
         print("!" * 60 + "\n")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        err_type = type(e).__name__
+        if isinstance(e, FileNotFoundError):
+            clean_detail = f"Model files for '{model_name}' could not be located on the server."
+        else:
+            clean_detail = f"Server execution error ({err_type}) during encoding. Please inspect host console logs."
+        raise HTTPException(status_code=500, detail=clean_detail)
 
 
 @app.post("/v1/unload")
@@ -303,7 +308,9 @@ async def manual_unload(request: Request):
     model_to_evict = None
     try:
         data = await request.json()
-        model_to_evict = data.get("model_name")
+        raw_name = data.get("model_name")
+        if raw_name:
+            model_to_evict = os.path.basename(str(raw_name).strip())
     except Exception:
         pass
 

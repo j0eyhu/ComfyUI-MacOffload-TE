@@ -14,9 +14,12 @@ KLEIN_PROMPT_TEMPLATE = "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n
 
 class FluxKleinEncoder(BaseEncoder):
     """
-    Text conditioning encoder for Flux.2 Klein based on Qwen3 architecture.
+    Text conditioning encoder for FLUX.2 Klein models (4B & 9B DiT variants).
+    FLUX.2 Klein text encoders are based on Qwen3 CausalLM:
+      - Qwen3-4B for FLUX.2 Klein 4B DiT
+      - Qwen3-8B for FLUX.2 Klein 9B DiT
     Strictly aligns with ComfyUI comfy/text_encoders/flux.py:
-      - Uses KLEIN_PROMPT_TEMPLATE
+      - Uses KLEIN_PROMPT_TEMPLATE (<think> tags included)
       - Taps layer indices [9, 18, 27]
       - Concatenates 3 layers to 12288 dimensions
       - Accelerated direct Unified Memory (MPS) loading
@@ -149,11 +152,6 @@ class FluxKleinEncoder(BaseEncoder):
         }
 
 
-class FluxKlein4BEncoder(FluxKleinEncoder):
-    def __init__(self, model_path: str = None):
-        super().__init__(model_path=model_path or config.FLUX_KLEIN_4B_PATH)
-
-
-class FluxKlein9BEncoder(FluxKleinEncoder):
-    def __init__(self, model_path: str = None):
-        super().__init__(model_path=model_path or config.FLUX_KLEIN_9B_PATH)
+# Backward compatibility aliases
+FluxKlein4BEncoder = FluxKleinEncoder
+FluxKlein9BEncoder = FluxKleinEncoder

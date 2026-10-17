@@ -3,14 +3,14 @@ from ._flux_klein_helpers import process_flux_klein_encode
 
 class RemoteCLIPTextEncode:
     """
-    Remote CLIP Text Encoder node for Flux Klein models.
+    Remote CLIP Text Encoder node for Flux Klein (Flux.2 & Flux.3) models.
     Delegates tokenization and embedding forward pass to macOS (Apple Silicon MPS)
     via safe safetensors streams, saving local GPU VRAM.
     """
 
     DESCRIPTION = (
-        "Offloads Flux.2 Klein (4B / 9B) text encoding to a remote macOS server running "
-        "on Apple Silicon Unified Memory (MPS), saving local GPU VRAM on 8GB cards."
+        "Offloads Flux.2 Klein (4B / 9B DiT) and Flux.3 Klein (5.6B DiT, Qwen3-VL-4B TE) text encoding "
+        "to a remote macOS server running on Apple Silicon Unified Memory (MPS), saving local GPU VRAM on 8GB cards."
     )
 
     @classmethod
@@ -21,6 +21,7 @@ class RemoteCLIPTextEncode:
                     [
                         "flux2-klein-4b-uncensored-text-encoder",
                         "flux2-klein-9b-uncensored-text-encoder",
+                        "Qwen3-VL-4b-Heretic",
                     ],
                     {
                         "default": "flux2-klein-4b-uncensored-text-encoder",

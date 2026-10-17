@@ -20,9 +20,12 @@ function hitsBadge(pos, nodeWidth) {
     );
 }
 
+function getNodeClass(node) {
+    return node?.comfyClass || node?.type || node?.constructor?.comfyClass || node?.constructor?.name || "";
+}
+
 function isMacOffloadNode(node) {
-    const comfyClass = node?.comfyClass || "";
-    return comfyClass.startsWith("MACOFFLOAD_");
+    return getNodeClass(node).startsWith("MACOFFLOAD_");
 }
 
 function chainCallback(proto, name, fn) {
@@ -253,21 +256,50 @@ function installActionButtons(node) {
             const data = await proxyRes.json();
             const allModels = data.models || [];
             if (!allModels.length) {
-                alert("Connected to Mac server, but no models were found in the server's models directory.");
+                alert(
+                    "Connected to Mac server, but no models were found in the server's models directory.\n\n" +
+                    "Please verify that your model folders (e.g. Qwen3-VL-4b-Heretic) are placed directly inside the models directory on your Mac.\n" +
+                    "Check the Mac server terminal output for the exact scanned directory."
+                );
                 return;
             }
 
-            const isFlux = node.comfyClass?.includes("CLIPTextEncode");
-            const isQwen = node.comfyClass?.includes("QwenImage");
+            const modelTypes = data.model_types || {};
+            const nodeClass = getNodeClass(node);
+            const isFlux = nodeClass.includes("CLIPTextEncode") || nodeClass.includes("Flux");
+            const isQwen = nodeClass.includes("QwenImage") || nodeClass.includes("Qwen");
 
             let filtered = allModels;
             if (isFlux) {
-                const matched = allModels.filter(m => m.toLowerCase().includes("flux"));
+                const matched = allModels.filter(m => {
+                    const type = modelTypes[m];
+                    if (type === "flux_klein" || type === "flux3_klein") return true;
+                    const lower = m.toLowerCase();
+                    // Prioritize Qwen3-VL-4B as Flux.3 Klein text encoder even if server tagged it otherwise
+                    if (lower.includes("qwen3") && lower.includes("4b")) return true;
+                    if (type === "qwen_image") return false;
+                    return lower.includes("flux");
+                });
                 if (matched.length > 0) filtered = matched;
             } else if (isQwen) {
-                const matched = allModels.filter(m => m.toLowerCase().includes("qwen"));
+                const matched = allModels.filter(m => {
+                    const type = modelTypes[m];
+                    const lower = m.toLowerCase();
+                    // Exclude Qwen3-VL-4B (it belongs to Flux.3 Klein)
+                    if (lower.includes("qwen3") && lower.includes("4b")) return false;
+                    if (type === "qwen_image") return true;
+                    if (type === "flux_klein" || type === "flux3_klein") return false;
+                    return lower.includes("image") || (lower.includes("qwen") && !lower.includes("4b"));
+                });
                 if (matched.length > 0) filtered = matched;
             }
+
+            console.log("[MacOffload] Fetched models from server:", {
+                allModels,
+                modelTypes,
+                filtered,
+                nodeClass,
+            });
 
             const targetList = filtered.length > 0 ? filtered : allModels;
             const currentValue = modelNameWidget.value;
@@ -282,14 +314,18 @@ function installActionButtons(node) {
                 modelNameWidget.value = targetList[0];
             }
 
-            node.setDirtyCanvas(true, true);
+            if (modelNameWidget.callback) {
+                modelNameWidget.callback(modelNameWidget.value);
+            }
+            node.setDirtyCanvas?.(true, true);
+            app.graph?.setDirtyCanvas?.(true, true);
 
             if (app.extensionManager?.toast?.add) {
                 app.extensionManager.toast.add({
                     severity: "success",
                     summary: "MacOffload",
-                    detail: `Fetched ${targetList.length} models from server!`,
-                    life: 3000,
+                    detail: `Fetched ${targetList.length} models from server: ${targetList.join(", ")}`,
+                    life: 4000,
                 });
             }
         } catch (err) {

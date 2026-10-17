@@ -25,9 +25,7 @@ class QwenImage21Encoder(BaseEncoder):
       - Slices vision tokens and injects `image_slots`
     """
 
-    def __init__(self, model_path: str = None):
-        if model_path is None:
-            model_path = config.QWEN_MODEL_PATH
+    def __init__(self, model_path: str):
         self.model_path = os.path.abspath(os.path.expanduser(model_path))
         self.device = config.DEVICE
         self.dtype = config.DTYPE
