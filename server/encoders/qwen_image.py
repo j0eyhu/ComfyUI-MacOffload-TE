@@ -123,8 +123,6 @@ class QwenImage21Encoder(BaseEncoder):
         with torch.no_grad():
             # 2. Extract last layer outputs without final RMSNorm
             backbone = getattr(self.model, "model", self.model)
-            language_model = getattr(backbone, "language_model", backbone)
-
             outputs = backbone(**inputs, output_hidden_states=True)
 
             # Crucial: ComfyUI uses the raw output of the last transformer block (hidden_states[-1] before model.norm)

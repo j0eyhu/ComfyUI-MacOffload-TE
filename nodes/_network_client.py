@@ -56,24 +56,23 @@ def send_safetensors_request(
     route: str,
     tensors: Optional[Dict[str, torch.Tensor]] = None,
     meta: Optional[Dict[str, Any]] = None,
-    server_url: Optional[str] = None,
     timeout: Tuple[int, int] = (10, 300),
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
     """
     Sends pure numerical tensors and metadata to the remote macOS server via HTTP POST
-    using the safetensors format.
+    using the safetensors format. The destination server address is resolved strictly
+    from local disk configuration or the MACOFFLOAD_SERVER_URL environment variable.
 
     Args:
         route: API route path, e.g. "/v1/encode/flux2-klein-4b-uncensored-text-encoder"
         tensors: Optional dictionary of named torch.Tensor inputs (e.g. vision references)
         meta: Optional dictionary of JSON-serializable parameters (prompts, options)
-        server_url: Base server URL. If None, reads from saved local disk configuration.
         timeout: Tuple of (connect_timeout, read_timeout) in seconds
 
     Returns:
         Tuple of (tensors_dict, metadata_dict) safely decoded from response.
     """
-    base_url = (server_url or get_server_url()).strip().rstrip("/")
+    base_url = get_server_url().strip().rstrip("/")
     clean_route = "/" + route.strip().lstrip("/")
     endpoint = f"{base_url}{clean_route}"
 

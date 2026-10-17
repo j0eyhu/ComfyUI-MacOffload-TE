@@ -94,13 +94,17 @@ sequenceDiagram
    `⚡ MacOffload/Conditioning`
 
 3. **Configuring Mac Server Address**:
-   - The Mac server address is saved locally on disk (`macoffload_config.json`) and is **never** embedded inside shared workflow files (protecting users from SSRF and untrusted redirects).
-   - Configure it in two ways:
-     - **In ComfyUI Settings**: Open ComfyUI Settings (⚙️ icon) and set `MacOffload: Remote macOS Server Address`.
-     - **On the Node**: Click the `⚙️ Configure Mac Server` button directly on any MacOffload node.
+   - The Mac server address is read strictly from local disk or environment variable, and is **never** embedded inside shared workflow files (protecting users from SSRF and untrusted redirects).
+   - Configure it in either of two ways:
+     - **Config file**: Edit `macoffload_config.json` inside the `ComfyUI-MacOffload-TE` custom node directory:
+       ```json
+       {
+         "server_url": "http://<your-mac-lan-ip>:8288"
+       }
+       ```
+     - **Environment variable**: Set `MACOFFLOAD_SERVER_URL` in your environment (e.g. `export MACOFFLOAD_SERVER_URL="http://<your-mac-lan-ip>:8288"` or via your ComfyUI startup batch script).
 
 4. **Node Controls & UI Features**:
-   - **⚙️ Configure Mac Server**: Opens a dialog to view or change the remote macOS server address saved on your local machine.
    - **🔄 Fetch Models from Server**: Queries the remote Mac server using your saved address and populates the `model_name` dropdown.
    - **Saved Workflow Memory**: The node preserves selected models across workflow reloads.
    - **❓ Help Badge**: Click the `?` icon in the node title bar (or right-click the node and select **"About this node ❓"**) to view diagnostics and usage information.

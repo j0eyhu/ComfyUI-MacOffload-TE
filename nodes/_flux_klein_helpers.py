@@ -1,4 +1,4 @@
-from typing import Tuple, Any, Optional
+from typing import Tuple, Any
 import torch
 from ._network_client import send_safetensors_request
 
@@ -6,7 +6,6 @@ from ._network_client import send_safetensors_request
 def process_flux_klein_encode(
     model_name: str,
     text: str,
-    server_url: Optional[str] = None,
 ) -> Tuple[Any]:
     """
     Core processing logic for remote Flux Klein text encoding.
@@ -29,7 +28,6 @@ def process_flux_klein_encode(
         route=route,
         tensors={},
         meta=meta,
-        server_url=server_url,
     )
 
     if "conditioning" not in res_tensors:

@@ -1,5 +1,5 @@
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 import torch
 from ._network_client import send_safetensors_request
 
@@ -19,7 +19,6 @@ def process_qwen_image_encode(
     model_name: str = "Qwen-Image-2.1-Text-Encoder-Heretic",
     vae: Any = None,
     resolution: int = 1024,
-    server_url: Optional[str] = None,
     **kwargs: Any,
 ) -> Tuple[Any, Any, Dict[str, Any]]:
     """
@@ -27,6 +26,7 @@ def process_qwen_image_encode(
     Preprocesses reference images, prepares safetensors payload, communicates with
     remote Mac server, attaches reference latents, and generates WanVAE latents.
     """
+    kwargs.pop("server_url", None)
     ref_latents: List[Any] = []
     images_vl: List[torch.Tensor] = []
     latent_w = latent_h = resolution or 1024
@@ -96,7 +96,6 @@ def process_qwen_image_encode(
         route=route,
         tensors=tensors_payload,
         meta=meta_payload,
-        server_url=server_url,
     )
 
     if "positive_embeds" not in res_tensors or "negative_embeds" not in res_tensors:

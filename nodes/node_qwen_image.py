@@ -87,6 +87,7 @@ class RemoteTextEncodeQwenImage21:
         resolution: int = 1024,
         **kwargs,
     ):
+        kwargs.pop("server_url", None)
         return process_qwen_image_encode(
             prompt=prompt,
             negative_prompt=negative_prompt,

@@ -48,38 +48,10 @@ def load_config() -> Dict[str, Any]:
     return config
 
 
-def save_config(config: Dict[str, Any]) -> None:
-    """
-    Persists configuration dictionary to local disk.
-    """
-    config_path = get_config_file_path()
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
-    except Exception as e:
-        print(f"[MacOffload] [Error] Failed to save {config_path}: {e}")
-        raise
-
-
 def get_server_url() -> str:
     """
     Convenience helper to retrieve the sanitized server URL from disk / env.
+    Address is read-only at runtime; changes are made strictly by editing
+    macoffload_config.json or setting the MACOFFLOAD_SERVER_URL environment variable.
     """
     return load_config().get("server_url", DEFAULT_SERVER_URL)
-
-
-def set_server_url(server_url: str) -> str:
-    """
-    Updates the server URL setting on disk and returns the sanitized URL.
-    """
-    clean_url = (server_url or "").strip().rstrip("/")
-    if not clean_url:
-        clean_url = DEFAULT_SERVER_URL
-
-    if not (clean_url.startswith("http://") or clean_url.startswith("https://")):
-        clean_url = f"http://{clean_url}"
-
-    config = load_config()
-    config["server_url"] = clean_url
-    save_config(config)
-    return clean_url

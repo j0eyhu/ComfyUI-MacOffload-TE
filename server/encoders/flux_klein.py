@@ -151,7 +151,3 @@ class FluxKleinEncoder(BaseEncoder):
             ]
         }
 
-
-# Backward compatibility aliases
-FluxKlein4BEncoder = FluxKleinEncoder
-FluxKlein9BEncoder = FluxKleinEncoder

@@ -46,62 +46,6 @@ function chainHandler(proto, name, fn) {
     };
 }
 
-async function fetchCurrentServerUrl() {
-    try {
-        const res = await fetch("/macoffload/config");
-        if (res.ok) {
-            const data = await res.json();
-            return data.server_url || "http://127.0.0.1:8288";
-        }
-    } catch (e) {
-        console.warn("[MacOffload] Failed to read current config:", e);
-    }
-    return "http://127.0.0.1:8288";
-}
-
-async function saveServerUrl(url) {
-    const clean = (url || "").trim().replace(/\/+$/, "");
-    if (!clean) return;
-    const res = await fetch("/macoffload/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ server_url: clean }),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${res.status}`);
-    }
-    const data = await res.json();
-    return data.server_url;
-}
-
-async function promptConfigureServerUrl() {
-    const currentUrl = await fetchCurrentServerUrl();
-    const newUrl = prompt(
-        "Enter remote macOS server address (saved locally on disk, not in workflow):",
-        currentUrl
-    );
-    if (newUrl === null) return; // User cancelled
-    const cleanUrl = newUrl.trim();
-    if (!cleanUrl) return;
-
-    try {
-        const saved = await saveServerUrl(cleanUrl);
-        if (app.extensionManager?.toast?.add) {
-            app.extensionManager.toast.add({
-                severity: "success",
-                summary: "MacOffload",
-                detail: `Server address saved locally: ${saved}`,
-                life: 3000,
-            });
-        } else {
-            alert(`Server address saved locally: ${saved}`);
-        }
-    } catch (err) {
-        alert(`Failed to save server URL: ${err.message}`);
-    }
-}
-
 function openHelpDialog(node) {
     const nodeData = node.constructor?.nodeData || {};
     const title = node.title || nodeData.display_name || "About this node";
@@ -136,7 +80,7 @@ function openHelpDialog(node) {
 
     // Server Configuration Info
     const cfgHead = document.createElement("h4");
-    cfgHead.textContent = "Server Configuration (Saved to Disk)";
+    cfgHead.textContent = "Server Configuration";
     cfgHead.style.margin = "12px 0 6px 0";
     cfgHead.style.color = "#61afef";
     container.appendChild(cfgHead);
@@ -144,8 +88,7 @@ function openHelpDialog(node) {
     const cfgDesc = document.createElement("p");
     cfgDesc.style.fontSize = "12px";
     cfgDesc.textContent =
-        "The Mac server address is saved locally in your ComfyUI configuration and never embedded in shared workflow files. " +
-        "You can configure it via ComfyUI Settings or by clicking '⚙️ Configure Server Address' on this node.";
+        "Configure the remote Mac address by editing 'macoffload_config.json' in the custom node directory or by setting the MACOFFLOAD_SERVER_URL environment variable.";
     container.appendChild(cfgDesc);
 
     // Mac Server Quick Verification
@@ -235,12 +178,7 @@ function installHelpBadge(node) {
 }
 
 function installActionButtons(node) {
-    // 1. Configure Server URL button
-    node.addWidget("button", "⚙️ Configure Mac Server", null, async () => {
-        await promptConfigureServerUrl();
-    });
-
-    // 2. Fetch Models button
+    // Fetch Models button
     node.addWidget("button", "🔄 Fetch Models from Server", null, async () => {
         const modelNameWidget = node.widgets?.find(w => w.name === "model_name");
         if (!modelNameWidget) return;
@@ -330,7 +268,7 @@ function installActionButtons(node) {
             }
         } catch (err) {
             alert(
-                `Failed to fetch models:\n${err.message}\n\nTip: Click '⚙️ Configure Mac Server' to verify or update your Mac's LAN IP address.`
+                `Failed to fetch models:\n${err.message}\n\nTip: Edit 'macoffload_config.json' or set MACOFFLOAD_SERVER_URL to update your Mac's LAN IP address.`
             );
         }
     });
@@ -338,27 +276,6 @@ function installActionButtons(node) {
 
 app.registerExtension({
     name: "MacOffload.HelpBadge",
-    async setup() {
-        // Register setting in ComfyUI Settings panel if supported
-        if (app.ui?.settings?.addSetting) {
-            app.ui.settings.addSetting({
-                id: "MacOffload.ServerUrl",
-                name: "MacOffload: Remote macOS Server Address",
-                type: "text",
-                defaultValue: "http://127.0.0.1:8288",
-                tooltip: "Base URL of the remote macOS te-server. Saved locally on disk, not inside workflows.",
-                onChange: async (newVal) => {
-                    if (newVal) {
-                        try {
-                            await saveServerUrl(newVal);
-                        } catch (e) {
-                            console.error("[MacOffload] Failed to persist server URL from settings:", e);
-                        }
-                    }
-                },
-            });
-        }
-    },
     nodeCreated(node) {
         if (!isMacOffloadNode(node)) return;
         installHelpBadge(node);
@@ -367,10 +284,6 @@ app.registerExtension({
     getNodeMenuItems(node) {
         if (!isMacOffloadNode(node)) return [];
         return [
-            {
-                content: "⚙️ Configure Mac Server Address",
-                callback: () => promptConfigureServerUrl(),
-            },
             {
                 content: "About this node ❓",
                 callback: () => openHelpDialog(node),

@@ -1,9 +1,9 @@
 """
 Internal ComfyUI backend API routes for MacOffload.
-Proxies model listing using the saved disk configuration and manages local server URL settings.
+Proxies model listing from the remote Mac server using the local disk configuration.
 """
 import asyncio
-from ._config import get_server_url, set_server_url
+from ._config import get_server_url
 
 try:
     from aiohttp import web
@@ -21,30 +21,6 @@ def register_macoffload_routes():
     PromptServer.instance._macoffload_routes_registered = True
 
     routes = PromptServer.instance.routes
-
-    @routes.get("/macoffload/config")
-    async def get_config_handler(request):
-        """
-        Returns the saved Mac server URL from local disk.
-        """
-        return web.json_response({"server_url": get_server_url()})
-
-    @routes.post("/macoffload/config")
-    async def set_config_handler(request):
-        """
-        Updates the Mac server URL on local disk.
-        """
-        try:
-            data = await request.json()
-            new_url = str(data.get("server_url", "")).strip()
-            if not new_url:
-                return web.json_response(
-                    {"error": "server_url field is required"}, status=400
-                )
-            saved_url = set_server_url(new_url)
-            return web.json_response({"status": "ok", "server_url": saved_url})
-        except Exception as err:
-            return web.json_response({"error": str(err)}, status=500)
 
     @routes.get("/macoffload/models")
     async def get_models_proxy(request):
@@ -79,7 +55,7 @@ def register_macoffload_routes():
             if "127.0.0.1" in target_url or "localhost" in target_url:
                 err_msg += (
                     " (Target is set to 127.0.0.1/localhost. If te-server is running "
-                    "on another Mac, please configure your Mac's LAN address in Settings)"
+                    "on another Mac, please configure your Mac's LAN address in macoffload_config.json or MACOFFLOAD_SERVER_URL)"
                 )
             return web.json_response(
                 {
