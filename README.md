@@ -1,22 +1,22 @@
 # ComfyUI-MacOffload-TE ⚡
 
-> **High-Performance Cross-Platform Text Encoder Offloading for ComfyUI**  
-> Offload heavy Text Encoders (Flux.2 Klein, Flux.3 Klein, Qwen-Image-2.1) from your VRAM-constrained GPU (e.g. RTX 4060 8GB) to a macOS machine with Apple Silicon Unified Memory (MPS) over your local network — eliminating model swapping, boosting generation speed, and unlocking higher native image resolutions.
+> **High-Performance Cross-Platform Conditioning Bridge for ComfyUI**  
+> Offload heavy conditioning models (Flux.2 Klein, Flux.3 Klein, Qwen-Image-2.1) from your VRAM-constrained GPU (e.g. RTX 4060 8GB) to a macOS machine with Apple Silicon Unified Memory (MPS) over your local network — eliminating PCIe model swapping and freeing local VRAM for the diffusion backbone.
 
 ---
 
 ## 1. Overview & Motivation
 
-When running state-of-the-art diffusion pipelines (such as Flux Klein or Qwen Image) on consumer GPUs with 8GB VRAM (such as RTX 4060 8GB), the text encoder often occupies 8GB to 18GB of memory. On single-GPU setups, this forces ComfyUI into continuous, aggressive model swapping (VRAM thrashing between GPU and system RAM over PCIe), causing steep performance degradation, sluggish iteration cycles, and frequent out-of-memory (OOM) crashes.
+Running modern diffusion pipelines (such as FLUX.2 Klein, FLUX.3 Klein, or Qwen-Image-2.1) on consumer GPUs with 8GB VRAM (such as an RTX 4060 8GB) presents a severe memory bottleneck. The text and vision encoders for these models demand 8GB to 18GB of memory on their own. On a single-GPU setup, ComfyUI must constantly swap models back and forth between GPU VRAM and system RAM over the PCIe bus, introducing noticeable delays between the conditioning and sampling stages, and frequently triggering out-of-memory (OOM) errors.
 
-**ComfyUI-MacOffload-TE** eliminates this bottleneck by offloading heavy text encoders to a remote macOS device (such as a MacBook, Mac mini, or Mac Studio) equipped with Apple Silicon Unified Memory:
+**ComfyUI-MacOffload-TE** resolves this by offloading the entire conditioning forward pass to a remote macOS device (such as a MacBook, Mac mini, or Mac Studio) equipped with Apple Silicon Unified Memory:
 
-- **0 MB Local VRAM Footprint**: The entire text encoder runs remotely on Apple Silicon MPS, completely freeing your local GPU from text encoder memory overhead.
-- **Faster Generation & Higher Efficiency**: Completely bypasses the sluggish PCIe model swapping phase between text encoding and diffusion sampling. The local GPU stays primed with diffusion weights, launching sampling immediately and dramatically accelerating generation throughput.
-- **Higher Direct Output Resolutions**: Reclaiming precious VRAM headroom allows the local GPU to allocate maximum memory to the diffusion transformer (DiT) and VAE, enabling direct generation at substantially higher native image resolutions and larger latent dimensions without OOM errors.
-- **Dual-Device Synergy**:
-  - **Client (Windows)**: Dedicates 100% of GPU compute and VRAM to diffusion backbone sampling and VAE decoding.
-  - **Server (macOS / Apple Silicon)**: Keeps large text encoders resident in Unified Memory (MPS), serving tokenization and embedding forward passes over low-latency, safe safetensors streaming.
+- **0 MB Local VRAM Footprint**: The conditioning stage runs entirely on the remote Mac (Apple Silicon MPS), requiring zero local GPU VRAM.
+- **Eliminates PCIe Swapping Delays**: Bypasses the continuous unloading and reloading of multi-gigabyte models over the PCIe bus. The local GPU remains primed with the diffusion model, launching sampling immediately once conditioning embeddings arrive.
+- **More Headroom for Diffusion & Higher Resolutions**: Freeing up 8GB to 18GB of local VRAM allows your GPU to dedicate its full memory capacity to the diffusion transformer (DiT) and VAE, enabling direct generation at higher resolutions without OOM crashes.
+- **Hardware Synergy Across Devices**:
+  - **Local PC**: Dedicates 100% of GPU compute and VRAM to diffusion sampling and VAE decoding.
+  - **Remote Mac**: Uses high-capacity Apple Silicon Unified Memory to keep heavy encoders resident, returning conditioning tensors over the local network.
 
 ---
 
