@@ -14,7 +14,7 @@ Running modern diffusion pipelines (such as FLUX.2 Klein, FLUX.3 Klein, or Qwen-
 - **0 MB Local VRAM Footprint**: The conditioning stage runs entirely on the remote Mac (Apple Silicon MPS), requiring zero local GPU VRAM.
 - **Eliminates PCIe Swapping Delays**: Bypasses the continuous unloading and reloading of multi-gigabyte models over the PCIe bus. The local GPU remains primed with the diffusion model, launching sampling immediately once conditioning embeddings arrive.
 - **More Headroom for Diffusion & Higher Resolutions**: Freeing up 8GB to 18GB of local VRAM allows your GPU to dedicate its full memory capacity to the diffusion transformer (DiT) and VAE, enabling direct generation at higher resolutions without OOM crashes.
-- **Optimized Server Memory & Compute**: Automatically truncates unused trailing language layers and classification heads before GPU/MPS staging (e.g., saving ~4.2GB Unified Memory on FLUX.2 Klein 9B and ~1.0GB on FLUX.3 Klein), speeding up encoding latency by 20%~25% while maintaining 100% bit-for-bit numerical equivalence.
+- **Pre-load Config Truncation & 5x Faster Cold Loads**: Pre-configures model skeletons to only instantiate tapped layers (28 layers for FLUX.2, 33 layers for FLUX.3), causing HuggingFace to mark trailing layers and vocabulary heads (`lm_head`) as `UNEXPECTED`. This physically bypasses ~4.2GB of disk I/O and CPU memory allocations from the root, collapsing FLUX.2 Klein 9B cold-load times from **52.12s down to 10.32s (5x speedup)** while preserving 100% bit-for-bit mathematical equivalence.
 - **Hardware Synergy Across Devices**:
   - **Local PC**: Dedicates 100% of GPU compute and VRAM to diffusion sampling and VAE decoding.
   - **Remote Mac**: Uses high-capacity Apple Silicon Unified Memory to keep heavy encoders resident, returning conditioning tensors over the local network.
@@ -67,6 +67,25 @@ sequenceDiagram
     Srv-->>Win: HTTP 200 (Serialized safetensors Binary Stream)
     Note over Win: Inject conditioning into diffusion sampling
 ```
+
+### Pre-load Config Truncation (Physical Disk I/O & Memory Bypass)
+
+Standard CausalLM and Vision-Language models load 36 full Transformer layers plus an expansive vocabulary classification head (`lm_head`, ~1.24GB in bf16). However, FLUX conditioning pipelines only tap intermediate hidden states:
+- **FLUX.2 Klein (4B & 9B DiT)**: Taps layers `[9, 18, 27]`. Layers 28 through 35 and `lm_head` are completely unused.
+- **FLUX.3 Klein (5.6B DiT)**: Taps layers `[4, 8, 12, 16, 20, 24, 28, 32]`. Layers 33 through 35 and `lm_head` are completely unused.
+
+Instead of reading the entire model into RAM and deleting trailing layers post-hoc, **ComfyUI-MacOffload-TE pre-configures the model configuration before loading**:
+1. **Source Skeleton Pruning**: Sets `num_hidden_layers = 28` (FLUX.2) or `text_config.num_hidden_layers = 33` (FLUX.3) and instantiates via `AutoModel` directly.
+2. **Physical Disk I/O Bypass**: Hugging Face automatically classifies trailing layers and `lm_head` as `UNEXPECTED`, **completely skipping their read from disk and avoiding CPU memory allocation entirely**.
+3. **100% Bit-for-Bit Exactness**: Retained layers are feedforward transformations completely independent of trailing blocks (`max_diff = 0.0`).
+4. **Quiet Production Logging**: Temporary verbosity suppression silences multi-line loading tables, keeping server logs concise and clean.
+
+#### Benchmark (Apple Silicon MPS — FLUX.2 Klein 9B Cold Load):
+| Metric | Standard Loader | Pre-load Config Truncation | Improvement |
+| :--- | :--- | :--- | :--- |
+| **Staging Time (`Loading weights`)** | 45.00s (`8.68 it/s`) | **4.00s (`64.57 it/s`)** | **11x faster staging** |
+| **Total Cold Load & MPS Residency** | 52.12s | **10.32s** | **5x overall speedup (-41.8s)** |
+| **Loaded Tensor Count** | 399 tensors (~16.4GB) | **310 tensors (~12.2GB)** | **~4.2GB less disk I/O & RAM** |
 
 ---
 

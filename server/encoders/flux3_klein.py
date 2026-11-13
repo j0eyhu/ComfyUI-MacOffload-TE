@@ -3,7 +3,8 @@ import os
 import time
 from typing import Any, Dict, List
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoConfig
+from transformers import logging as tf_logging
 
 import config
 from .base import BaseEncoder
@@ -55,6 +56,25 @@ class Flux3KleinEncoder(BaseEncoder):
         t0 = time.time()
         print(f"[Flux3Klein] Staging model weights with C++ empty-tensor loader ({self.dtype})...")
 
+        max_needed = max(self.target_layers) + 1  # 32 + 1 = 33
+        model_config = None
+        try:
+            model_config = AutoConfig.from_pretrained(
+                self.model_path,
+                local_files_only=True,
+                trust_remote_code=True,
+            )
+            text_cfg = getattr(model_config, "text_config", model_config)
+            original_layers = getattr(text_cfg, "num_hidden_layers", None)
+            if original_layers is not None and original_layers > max_needed:
+                text_cfg.num_hidden_layers = max_needed
+                if hasattr(model_config, "num_hidden_layers"):
+                    model_config.num_hidden_layers = max_needed
+                print(f"[Flux3Klein] Config pre-set to {max_needed} layers (skipping {original_layers - max_needed} trailing layers & lm_head from disk).")
+        except Exception as e:
+            print(f"[Flux3Klein] Config pre-truncation notice ({e}); proceeding with standard config.")
+            model_config = None
+
         # Resolve model class: prioritize direct Qwen3VLForConditionalGeneration import to avoid
         # auto-mapping import side-effects in third-party packages.
         model_cls = None
@@ -69,11 +89,14 @@ class Flux3KleinEncoder(BaseEncoder):
                 from transformers import AutoModel
                 model_cls = AutoModel
 
+        prev_verbosity = tf_logging.get_verbosity()
+        tf_logging.set_verbosity_error()
         try:
             # Solid production loader: low_cpu_mem_usage=True uses meta-tensor initialization.
             # Bypasses device_map accelerate dispatch hooks to prevent Python 3.13 Metal segfaults.
             self.model = model_cls.from_pretrained(
                 self.model_path,
+                config=model_config,
                 torch_dtype=self.dtype,
                 low_cpu_mem_usage=True,
                 local_files_only=True,
@@ -81,16 +104,26 @@ class Flux3KleinEncoder(BaseEncoder):
             )
         except Exception as e:
             print(f"[Flux3Klein] Staging fallback ({e}); retrying standard loader...")
-            self.model = model_cls.from_pretrained(
-                self.model_path,
-                torch_dtype=self.dtype,
-                local_files_only=True,
-                trust_remote_code=True,
-            )
+            try:
+                self.model = model_cls.from_pretrained(
+                    self.model_path,
+                    torch_dtype=self.dtype,
+                    low_cpu_mem_usage=True,
+                    local_files_only=True,
+                    trust_remote_code=True,
+                )
+            except Exception as e2:
+                print(f"[Flux3Klein] Fallback ({e2}); retrying basic loader...")
+                self.model = model_cls.from_pretrained(
+                    self.model_path,
+                    torch_dtype=self.dtype,
+                    local_files_only=True,
+                    trust_remote_code=True,
+                )
+        finally:
+            tf_logging.set_verbosity(prev_verbosity)
 
-        # Truncate layers to max_needed (e.g. 32 + 1 = 33) and remove unused lm_head
-        # before transferring to device to save unified memory and eliminate redundant compute
-        max_needed = max(self.target_layers) + 1
+        # Safeguard: ensure trailing layers and lm_head are pruned even if fallback loaded full model
         backbone = getattr(self.model, "model", self.model)
         lang_model = getattr(backbone, "language_model", backbone)
         layers = getattr(lang_model, "layers", None)
@@ -104,7 +137,7 @@ class Flux3KleinEncoder(BaseEncoder):
                     self.model.config.text_config.num_hidden_layers = max_needed
             print(f"[Flux3Klein] Truncated {truncated_count} unused trailing layers (kept {max_needed} layers).")
 
-        if hasattr(self.model, "lm_head"):
+        if hasattr(self.model, "lm_head") and not isinstance(self.model.lm_head, torch.nn.Identity):
             del self.model.lm_head
             self.model.lm_head = torch.nn.Identity()
             print("[Flux3Klein] Removed unused lm_head classification layer.")
