@@ -88,6 +88,30 @@ class Flux3KleinEncoder(BaseEncoder):
                 trust_remote_code=True,
             )
 
+        # Truncate layers to max_needed (e.g. 32 + 1 = 33) and remove unused lm_head
+        # before transferring to device to save unified memory and eliminate redundant compute
+        max_needed = max(self.target_layers) + 1
+        backbone = getattr(self.model, "model", self.model)
+        lang_model = getattr(backbone, "language_model", backbone)
+        layers = getattr(lang_model, "layers", None)
+        if layers is not None and len(layers) > max_needed:
+            truncated_count = len(layers) - max_needed
+            del layers[max_needed:]
+            if hasattr(self.model, "config"):
+                if hasattr(self.model.config, "num_hidden_layers"):
+                    self.model.config.num_hidden_layers = max_needed
+                if hasattr(self.model.config, "text_config") and hasattr(self.model.config.text_config, "num_hidden_layers"):
+                    self.model.config.text_config.num_hidden_layers = max_needed
+            print(f"[Flux3Klein] Truncated {truncated_count} unused trailing layers (kept {max_needed} layers).")
+
+        if hasattr(self.model, "lm_head"):
+            del self.model.lm_head
+            self.model.lm_head = torch.nn.Identity()
+            print("[Flux3Klein] Removed unused lm_head classification layer.")
+
+        import gc
+        gc.collect()
+
         print(f"[Flux3Klein] Transferring weights to {self.device}...")
         self.model = self.model.to(device=self.device)
         self.model.eval()
@@ -143,7 +167,8 @@ class Flux3KleinEncoder(BaseEncoder):
         position_ids_tensor = (attn_mask_tensor.cumsum(-1) - 1).masked_fill(attn_mask_tensor == 0, 1)
 
         with torch.no_grad():
-            outputs = self.model(
+            backbone = getattr(self.model, "model", self.model)
+            outputs = backbone(
                 input_ids=input_ids_tensor,
                 attention_mask=attn_mask_tensor,
                 position_ids=position_ids_tensor,

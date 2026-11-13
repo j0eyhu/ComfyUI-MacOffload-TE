@@ -69,6 +69,25 @@ class FluxKleinEncoder(BaseEncoder):
                 trust_remote_code=True,
             )
 
+        # Truncate layers to max_needed (e.g. 27 + 1 = 28) and remove unused lm_head
+        # before transferring to device to save unified memory and eliminate redundant compute
+        max_needed = max(self.target_layers) + 1
+        backbone = getattr(self.model, "model", self.model)
+        if hasattr(backbone, "layers") and len(backbone.layers) > max_needed:
+            truncated_count = len(backbone.layers) - max_needed
+            del backbone.layers[max_needed:]
+            if hasattr(self.model, "config") and hasattr(self.model.config, "num_hidden_layers"):
+                self.model.config.num_hidden_layers = max_needed
+            print(f"[FluxKlein] Truncated {truncated_count} unused trailing layers (kept {max_needed} layers).")
+
+        if hasattr(self.model, "lm_head"):
+            del self.model.lm_head
+            self.model.lm_head = torch.nn.Identity()
+            print("[FluxKlein] Removed unused lm_head classification layer.")
+
+        import gc
+        gc.collect()
+
         print(f"[FluxKlein] Transferring weights to {self.device}...")
         self.model = self.model.to(device=self.device)
         self.model.eval()
@@ -114,7 +133,8 @@ class FluxKleinEncoder(BaseEncoder):
         ).to(self.device)
 
         with torch.no_grad():
-            outputs = self.model(**inputs, output_hidden_states=True)
+            backbone = getattr(self.model, "model", self.model)
+            outputs = backbone(**inputs, output_hidden_states=True)
 
             all_hidden_states = outputs.hidden_states
 

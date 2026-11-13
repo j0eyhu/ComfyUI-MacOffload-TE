@@ -14,6 +14,7 @@ Running modern diffusion pipelines (such as FLUX.2 Klein, FLUX.3 Klein, or Qwen-
 - **0 MB Local VRAM Footprint**: The conditioning stage runs entirely on the remote Mac (Apple Silicon MPS), requiring zero local GPU VRAM.
 - **Eliminates PCIe Swapping Delays**: Bypasses the continuous unloading and reloading of multi-gigabyte models over the PCIe bus. The local GPU remains primed with the diffusion model, launching sampling immediately once conditioning embeddings arrive.
 - **More Headroom for Diffusion & Higher Resolutions**: Freeing up 8GB to 18GB of local VRAM allows your GPU to dedicate its full memory capacity to the diffusion transformer (DiT) and VAE, enabling direct generation at higher resolutions without OOM crashes.
+- **Optimized Server Memory & Compute**: Automatically truncates unused trailing language layers and classification heads before GPU/MPS staging (e.g., saving ~4.2GB Unified Memory on FLUX.2 Klein 9B and ~1.0GB on FLUX.3 Klein), speeding up encoding latency by 20%~25% while maintaining 100% bit-for-bit numerical equivalence.
 - **Hardware Synergy Across Devices**:
   - **Local PC**: Dedicates 100% of GPU compute and VRAM to diffusion sampling and VAE decoding.
   - **Remote Mac**: Uses high-capacity Apple Silicon Unified Memory to keep heavy encoders resident, returning conditioning tensors over the local network.
